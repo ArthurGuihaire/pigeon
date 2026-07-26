@@ -1,0 +1,27 @@
+[package]
+name = "pigeon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrayvec = { version = "0.7", features = ["serde"] }
+axum = "0.8.9"
+directories = "6.0"
+iroh = "1.0"
+n0-error = "1.0"
+n0-future = "0.3"
+reqwest = { version = "0.13", features = ["json"] }
+serde = "1.0"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
+
+[[bin]]
+name = "client"
+path = "src/client/client.rs"
+
+[[bin]]
+name = "server"
+path = "src/server/server.rs"
+
+[profile.release]
+lto = true
+strip = true
