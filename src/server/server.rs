@@ -44,11 +44,11 @@ async fn handle_registration(
 async fn handle_key_request(
     axum::extract::State(state): axum::extract::State<SharedState>,
     axum::extract::Json(payload): axum::extract::Json<GetKeyRequest>,
-) -> Result<Json<PublicKey>, (StatusCode, &'static str)>
+) -> Result<Json<PublicKey>, (StatusCode, String)>
 {
     let db = state.lock().await;
     match db.get(&payload.target) {
-        None => Err((StatusCode::BAD_GATEWAY, "that name is not registered")),
+        None => Err((StatusCode::BAD_REQUEST, format!("{} is not registered", &payload.target))),
         Some(key) => Ok(Json(*key)),
     }
 }
