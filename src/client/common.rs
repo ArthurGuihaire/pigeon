@@ -87,13 +87,10 @@ pub async fn get_public_key(
 
     loop {
         //send post
-        println!("sending post request");
         let response = client.get(&(*GETKEY_URL)).json(&request).send().await;
-        println!("received response");
 
         match response {
             Ok(res) => {
-                // server says OK if client map is available
                 let status = res.status();
                 if let Err(reqwest_err) = res.error_for_status_ref() {
                     let error_text = res.text().await?;
@@ -102,19 +99,16 @@ pub async fn get_public_key(
                     return Err(reqwest_err);
                 }
                 if status.is_success() {
-                    println!("received success");
                     let publickey: PublicKey = res.json().await.unwrap();
-                    println!("received key: {:?}", publickey);
                     return Ok(publickey)
                 }
                 // other responses are unexpected, something went wrong
             }
             Err(e) => {
+                // for network errors, try again
                 eprintln!("network error: {}", e);
             }
         }
-
-        println!("response was nothing maybe?");
     }
 }
 
@@ -142,14 +136,10 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
     };
 
     loop {
-        //send post
-        println!("sending post request");
         let response = client.post(&(*REGISTER_URL)).json(&request).send().await;
-        println!("received response");
 
         match response {
             Ok(res) => {
-                // server says OK if client map is available
                 let status = res.status();
                 if let Err(reqwest_err) = res.error_for_status_ref() {
                     let error_text = res.text().await?;
@@ -158,16 +148,14 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
                     return Err(reqwest_err);
                 }
                 if status.is_success() {
-                    println!("received success");
                     return Ok(())
                 }
                 // other responses are unexpected, something went wrong
             }
             Err(e) => {
+                // for network errors, try again
                 eprintln!("network error: {}", e);
             }
         }
-
-        println!("response was nothing maybe?");
     }
 }
