@@ -12,3 +12,10 @@ pub struct RegisterRequest {
 pub struct GetKeyRequest {
     pub target: ArrayString<32>,
 }
+
+#[derive(Serialize, Deserialize)]
+#[repr(C)]
+pub struct FileHeader {
+    pub size: u64,
+    pub filename: ArrayString<256>,
+}

@@ -11,13 +11,12 @@ use pigeon::constants::{GETKEY_URL, REGISTER_URL, NAME_FILE, KEY_FILE};
 pub const PIGEON_ALPN: &[u8] = b"pigeon/0";
 
 pub static USERNAME: OnceLock<ArrayString<32>> = OnceLock::new();
-pub static SECRETKEY: OnceLock<SecretKey> = OnceLock::new();
 
 pub fn try_load_name(path_prefix: &Path) -> Result<ArrayString<32>> {
     let name_path = path_prefix.join(NAME_FILE);
     if name_path.exists() {
         let name_bytes = std::fs::read(name_path).std_context("read name file")?;
-        let name_arraystring: ArrayString<32> = ArrayString::from(&String::from_utf8(name_bytes).map_err(|_| eprintln!("Error in name file, exiting")).unwrap()).map_err(|_| eprintln!("Error in name file, exiting")).unwrap();
+        let name_arraystring: ArrayString<32> = ArrayString::from(&String::from_utf8(name_bytes).expect("Name file is not UTF-8")).expect("Cannot convert name to arraystring");
         Ok(name_arraystring)
     }
     else {
@@ -31,9 +30,9 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey)
     let mut name_ararystring: ArrayString<32>;
     print!("No name set. choose your name: ");
     loop {
-        std::io::stdout().flush();
-        std::io::stdin().read_line(&mut name_string);
-        name_ararystring = ArrayString::from(&name_string).map_err(|_| eprintln!("Error while reading from stdin, exiting")).unwrap();
+        let _ = std::io::stdout().flush();
+        std::io::stdin().read_line(&mut name_string).expect("IO error while reading from stdin");
+        name_ararystring = ArrayString::from(&name_string).expect("bad stdin input");
 
         let result = register_http(&name_ararystring, publickey).await;
         if let Ok(_) = result {
@@ -123,8 +122,8 @@ pub async fn user_get_public_key() -> PublicKey {
     let mut buf = String::new();
     loop {
         print!("Target username: ");
-        let _ = std::io::stdout().flush().map_err(|e| eprintln!("error flushing stdout: {e}"));
-        let _ = std::io::stdin().read_line(&mut buf).map_err(|e| eprintln!("error reading line: {e}"));
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stdin().read_line(&mut buf).expect("IO error while reading from stdin");
         let name: ArrayString<32> = ArrayString::from(&buf).unwrap();
         let result = get_public_key(&name).await;
         match result {
