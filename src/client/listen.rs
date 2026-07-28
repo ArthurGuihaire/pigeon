@@ -28,13 +28,15 @@ async fn recv_file_chunks(recv_stream: &mut RecvStream, send_stream: &mut SendSt
                 File::create(file_path).await.expect("Failed to create file")
             }
             else {
-                send_stream.write_all(&[0]);
+                send_stream.write_all(&[0]).await.anyerr()?;
+                send_stream.finish().anyerr()?;
                 return Err(format!("Not permitted to overwrite {}, exiting", file_path.display()).into());
             }
         }
     };
 
-    send_stream.write_all(&[1]);
+    send_stream.write_all(&[1]).await.anyerr()?;
+    send_stream.finish().anyerr()?;
 
     let bytes_copied = tokio::io::copy(recv_stream, &mut file).await;
     match bytes_copied {

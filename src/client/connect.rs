@@ -4,7 +4,7 @@ use arrayvec::ArrayString;
 use iroh::{EndpointAddr, PublicKey, endpoint::SendStream};
 use n0_error::{Result, StdResultExt};
 use pigeon::{FileHeader, constants::{DATA_DIR, CHUNK_SIZE}};
-use tokio::{fs::File, io::AsyncReadExt};
+use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt}};
 
 use crate::common::{PIGEON_ALPN, bind_endpoint, load_or_create_identity};
 
@@ -45,12 +45,14 @@ pub async fn connect_and_send(target: &PublicKey, path: &Path) -> Result<()> {
     //send header message
     let header_message = postcard::to_allocvec(&generate_header(path).await).unwrap();
     send.write_all(&header_message).await.anyerr()?;
-    send.finish().anyerr()?;
+    send.flush().await.anyerr()?;
 
     let response = recv.read_u8().await?;
     if response == 1 {
         send_file_chunks(&mut send, path).await?;
     }
+
+    send.finish().anyerr()?;
 
     endpoint.close().await;
     Ok(())
