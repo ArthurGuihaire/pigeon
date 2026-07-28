@@ -77,7 +77,7 @@ pub async fn listen() -> Result<()> {
             let header = recv.read_chunk(size_of::<FileHeader>()).await.anyerr()?.unwrap();
             let header: FileHeader = postcard::from_bytes(&header).anyerr()?;
 
-            let _ = recv_file_chunks(&mut recv, &PathBuf::from_str(&header.filename).unwrap(), header.size).await;
+            let _ = recv_file_chunks(&mut recv, &mut send, &PathBuf::from_str(&header.filename).unwrap(), header.size).await;
 
             let res = tokio::time::timeout(Duration::from_secs(3), async move {
                 let closed = conn.closed().await;
