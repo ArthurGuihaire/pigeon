@@ -80,10 +80,14 @@ pub async fn listen() -> Result<()> {
             let header: FileHeader = postcard::from_bytes(&header).anyerr()?;
 
             if confirm_write(&header.filename, &header.sender_name).await {
+                send.write_all(&[1]).await.expect("failed to send confirmation");
                 let _ = recv_file_chunks(&mut recv, &mut send, &PathBuf::from_str(&header.filename).unwrap(), header.size).await;
+                println!("Finished receiving file, close with control+c");
             }
-
-            println!("Finished receiving file, close with control+c");
+            else {
+                send.write_all(&[0]).await.expect("failed to send confirmation");
+                println!("Not receiving file");
+            }
 
             let res = tokio::time::timeout(Duration::from_secs(3), async move {
                 let closed = conn.closed().await;

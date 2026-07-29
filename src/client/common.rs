@@ -16,7 +16,7 @@ pub fn try_load_name(path_prefix: &Path) -> Result<ArrayString<32>> {
     let name_path = path_prefix.join(NAME_FILE);
     if name_path.exists() {
         let name_bytes = std::fs::read(name_path).std_context("read name file")?;
-        let name_arraystring: ArrayString<32> = ArrayString::from(&String::from_utf8(name_bytes).expect("Name file is not UTF-8")).expect("Cannot convert name to arraystring");
+        let name_arraystring: ArrayString<32> = ArrayString::from(&String::from_utf8(name_bytes).expect("Name file is not UTF-8").trim()).expect("Cannot convert name to arraystring");
         Ok(name_arraystring)
     }
     else {
@@ -32,7 +32,7 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey)
     loop {
         let _ = std::io::stdout().flush();
         std::io::stdin().read_line(&mut name_string).expect("IO error while reading from stdin");
-        name_ararystring = ArrayString::from(&name_string).expect("bad stdin input");
+        name_ararystring = ArrayString::from(&name_string.trim()).expect("bad stdin input");
 
         let result = register_http(&name_ararystring, publickey).await;
         if let Ok(_) = result {
@@ -44,7 +44,7 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey)
     if let Some(parent) = name_path.parent() && !parent.as_os_str().is_empty() {
         std::fs::create_dir_all(parent).std_context("create config dir")?;
     }
-    std::fs::write(name_path, name_string).std_context("write name file")?;
+    std::fs::write(name_path, name_string.trim()).std_context("write name file")?;
     return Ok(name_ararystring);
 }
 
