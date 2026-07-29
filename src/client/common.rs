@@ -118,7 +118,7 @@ pub async fn user_get_public_key() -> PublicKey {
         print!("Target username: ");
         let _ = std::io::stdout().flush();
         let _ = std::io::stdin().read_line(&mut buf).expect("IO error while reading from stdin");
-        let name: ArrayString<32> = ArrayString::from(&buf).unwrap();
+        let name: ArrayString<32> = ArrayString::from(buf.trim()).unwrap();
         let result = get_public_key(&name).await;
         match result {
             Ok(key) => return key,
