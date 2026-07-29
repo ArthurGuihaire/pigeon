@@ -18,4 +18,5 @@ pub struct GetKeyRequest {
 pub struct FileHeader {
     pub size: u64,
     pub filename: ArrayString<256>,
+    pub sender_name: ArrayString<32>,
 }

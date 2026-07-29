@@ -1,4 +1,4 @@
-use std::{os::unix::ffi::OsStrExt, path::Path};
+use std::path::Path;
 
 use arrayvec::ArrayString;
 use iroh::{EndpointAddr, PublicKey, endpoint::SendStream};
@@ -6,7 +6,7 @@ use n0_error::{Result, StdResultExt};
 use pigeon::{FileHeader, constants::{DATA_DIR, CHUNK_SIZE}};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt}};
 
-use crate::common::{PIGEON_ALPN, bind_endpoint, load_or_create_identity};
+use crate::common::{PIGEON_ALPN, USERNAME, bind_endpoint, load_or_create_identity};
 
 async fn generate_header(path: &Path) -> FileHeader {
     let filename = path.file_name().expect("Target path is not a file");
@@ -15,6 +15,7 @@ async fn generate_header(path: &Path) -> FileHeader {
     FileHeader {
         size: length,
         filename: ArrayString::from(filename.to_str().unwrap()).unwrap(),
+        sender_name: USERNAME.get().expect("Cannot get username").clone(),
     }
 }
 

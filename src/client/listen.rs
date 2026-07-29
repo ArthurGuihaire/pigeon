@@ -7,10 +7,23 @@ use tokio::fs::File;
 
 use crate::common::{bind_endpoint, load_or_create_identity};
 
-async fn confirm_overwrite(file_path: &Path) -> bool {
-    print!("Overwrite {}? (y/N) ", file_path.display());
+async fn confirm_write(filename: &str, sender_name: &str) -> bool {
+    //first, ask for initial confirmation
+    print!("Receive {filename} from {sender_name} ?");
     let _ = std::io::stdout().flush();
     let mut input = String::new();
+    let confirmed = if std::io::stdin().read_line(&mut input).is_ok() {
+        let trimmed = input.trim();
+        trimmed.starts_with('y') || trimmed.starts_with('Y')
+    }
+    else { false };
+    //if not confirmed, exit now
+    if !confirmed { return false };
+    //if confirmed and the file doesn't exist already, go
+    if !PathBuf::from(filename).exists() { return true };
+    println!("{filename} exists already");
+    print!("Overwrite {filename}? (y/N) ");
+    let _ = std::io::stdout().flush();
     if std::io::stdin().read_line(&mut input).is_ok() {
         let trimmed = input.trim();
         trimmed.starts_with('y') || trimmed.starts_with('Y')
@@ -19,21 +32,7 @@ async fn confirm_overwrite(file_path: &Path) -> bool {
 }
 
 async fn recv_file_chunks(recv_stream: &mut RecvStream, send_stream: &mut SendStream, file_path: &Path, expected_size: u64) -> Result<()> {
-    let result = File::create_new(file_path).await;
-    let mut file = match result {
-        Ok(file) => file,
-        Err(e) => {
-            eprintln!("File already exists: {e}");
-            if confirm_overwrite(file_path).await {
-                File::create(file_path).await.expect("Failed to create file")
-            }
-            else {
-                send_stream.write_all(&[0]).await.anyerr()?;
-                send_stream.finish().anyerr()?;
-                return Err(format!("Not permitted to overwrite {}, exiting", file_path.display()).into());
-            }
-        }
-    };
+    let mut file = File::create(file_path).await.expect("Failed to create file");
 
     send_stream.write_all(&[1]).await.anyerr()?;
     send_stream.finish().anyerr()?;
@@ -43,6 +42,7 @@ async fn recv_file_chunks(recv_stream: &mut RecvStream, send_stream: &mut SendSt
         Ok(bytes_copied) => {
             if bytes_copied > expected_size {
                 eprintln!("Warning: more data written than expected, potentially corrupt file");
+                println!("expected size: {expected_size}, actual size: {bytes_copied}")
             }
             else if bytes_copied < expected_size {
                 eprintln!("Warning: less data written than expected, potentially corrupt file");
@@ -79,7 +79,11 @@ pub async fn listen() -> Result<()> {
             let header = recv.read_chunk(size_of::<FileHeader>()).await.anyerr()?.unwrap();
             let header: FileHeader = postcard::from_bytes(&header).anyerr()?;
 
-            let _ = recv_file_chunks(&mut recv, &mut send, &PathBuf::from_str(&header.filename).unwrap(), header.size).await;
+            if confirm_write(&header.filename, &header.sender_name).await {
+                let _ = recv_file_chunks(&mut recv, &mut send, &PathBuf::from_str(&header.filename).unwrap(), header.size).await;
+            }
+
+            println!("Finished receiving file, close with control+c");
 
             let res = tokio::time::timeout(Duration::from_secs(3), async move {
                 let closed = conn.closed().await;
