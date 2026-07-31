@@ -1,15 +1,17 @@
 use std::io::Write;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::Duration;
 
+use ed25519_dalek::{VerifyingKey, Verifier, Signature};
 use iroh::{Endpoint, PublicKey, SecretKey, endpoint::presets};
 use n0_error::{Result, StackResultExt, StdResultExt};
 use arrayvec::ArrayString;
 use pigeon::{GetKeyRequest, RegisterRequest};
-use pigeon::constants::{GETKEY_URL, REGISTER_URL, NAME_FILE, KEY_FILE};
+use pigeon::constants::{GETKEY_URL, REGISTER_URL, NAME_FILE, CLIENT_KEY_FILE};
+use rand::Rng;
 
 pub const PIGEON_ALPN: &[u8] = b"pigeon/0";
-
 pub static USERNAME: OnceLock<ArrayString<32>> = OnceLock::new();
 
 pub fn try_load_name(path_prefix: &Path) -> Result<ArrayString<32>> {
@@ -49,7 +51,7 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey)
 }
 
 pub fn load_or_create_identity(path_prefix: &Path) -> Result<SecretKey> {
-    let key_path = path_prefix.join(KEY_FILE);
+    let key_path = path_prefix.join(CLIENT_KEY_FILE);
     if key_path.exists() {
         let key = std::fs::read(key_path).std_context("read identity file")?;
         let mut key_bytes = [0u8; 32];
@@ -105,8 +107,9 @@ pub async fn get_public_key(
                 // other responses are unexpected, something went wrong
             }
             Err(e) => {
-                // for network errors, try again
+                // for network errors, wait a bit and try again
                 eprintln!("network error: {}", e);
+                std::thread::sleep(Duration::from_secs(1));
             }
         }
     }
@@ -157,5 +160,21 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
                 eprintln!("network error: {}", e);
             }
         }
+    }
+}
+
+pub async fn verify_server_identity(auth_url: &str, expected_public_key: &str) -> bool {
+    let pub_key_bytes = hex::decode(expected_public_key).expect("public key is not hex");
+    let verifying_key = VerifyingKey::from_bytes(&pub_key_bytes.try_into().expect("wrong public key length")).expect("cannot convert to verifying key");
+    let mut random_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut random_bytes);
+    let random_hex = hex::encode(&random_bytes);
+    let client = reqwest::Client::new();
+    let response: String = client.post(auth_url).json(&random_hex).send().await.expect("request failed").json().await.expect("cannot deserialize json");
+    let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
+    let signature = Signature::from_slice(&signature_bytes).expect("response is not a signature");
+    match verifying_key.verify(&random_bytes, &signature) {
+        Ok(_) => true,
+        Err(_) => false,
     }
 }

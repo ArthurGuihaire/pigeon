@@ -9,7 +9,7 @@ use crate::common::{bind_endpoint, load_or_create_identity};
 
 async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     //first, ask for initial confirmation
-    print!("Receive {filename} from {sender_name} ?");
+    print!("Receive {filename} from {sender_name}? (y/N) ");
     let _ = std::io::stdout().flush();
     let mut input = String::new();
     let confirmed = if std::io::stdin().read_line(&mut input).is_ok() {
