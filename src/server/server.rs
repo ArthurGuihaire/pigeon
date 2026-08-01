@@ -17,8 +17,7 @@ use ed25519_dalek::{SigningKey};
 
 use pigeon::RegisterRequest;
 
-use crate::utils::generate_and_save_private_key;
-use crate::utils::load_private_key;
+use crate::utils::{load_private_key, generate_and_save_private_key};
 
 #[derive(Clone)]
 struct SharedState {
@@ -35,9 +34,15 @@ async fn main() {
     let result = load_private_key(&key_path_1);
     let private_key = match result {
         Ok(key) => key,
-        Err(_) => match load_private_key(&key_path_2) {
-            Ok(key) => key,
-            Err(_) => generate_and_save_private_key(&key_path_1).expect("failed to generate private key"),
+        Err(e) => {
+            eprintln!("failed to load key: {e}");
+            match load_private_key(&key_path_2) {
+                Ok(key) => key,
+                Err(e) => {
+                    eprintln!("failed to load key: {e}");
+                    generate_and_save_private_key(&key_path_1).expect("failed to generate private key")
+                }
+            }
         }
     };
     let state = SharedState {
