@@ -23,6 +23,7 @@ pub static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 });
 pub const NAME_FILE: &str = "username.txt";
 pub const CLIENT_KEY_FILE: &str = "ed25519_key";
-pub const SERVER_KEY_FILE: &str = "ed25519_signing_key";
+pub const SERVER_KEY_FILE_1: &str = "ed25519_signing_key";
+pub const SERVER_KEY_FILE_2: &str = "/etc/secrets/ed25519_signing_key";
 
 pub const CHUNK_SIZE: usize = 1024 * 64; // 64 KiB

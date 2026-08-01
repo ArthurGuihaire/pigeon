@@ -7,13 +7,14 @@ use axum::routing::post;
 use ed25519_dalek::Signer;
 use iroh::PublicKey;
 use pigeon::GetKeyRequest;
+use pigeon::constants::SERVER_KEY_FILE_1;
+use pigeon::constants::SERVER_KEY_FILE_2;
 use std::path::Path;
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use ed25519_dalek::{SigningKey};
 
-use pigeon::constants::SERVER_KEY_FILE;
 use pigeon::RegisterRequest;
 
 use crate::utils::generate_and_save_private_key;
@@ -29,11 +30,15 @@ mod utils;
 
 #[tokio::main]
 async fn main() {
-    let key_path = Path::new(SERVER_KEY_FILE);
-    let result = load_private_key(&key_path);
+    let key_path_1 = Path::new(SERVER_KEY_FILE_1);
+    let key_path_2 = Path::new(SERVER_KEY_FILE_2);
+    let result = load_private_key(&key_path_1);
     let private_key = match result {
         Ok(key) => key,
-        Err(_) => generate_and_save_private_key(&key_path).expect("failed to generate private key"),
+        Err(_) => match load_private_key(&key_path_2) {
+            Ok(key) => key,
+            Err(_) => generate_and_save_private_key(&key_path_1).expect("failed to generate private key"),
+        }
     };
     let state = SharedState {
         clients: Arc::new(Mutex::new(HashMap::new())),
