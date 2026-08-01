@@ -173,8 +173,5 @@ pub async fn verify_server_identity(auth_url: &str, expected_public_key: &str) -
     let response: String = client.post(auth_url).json(&random_hex).send().await.expect("request failed").json().await.expect("cannot deserialize json");
     let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
     let signature = Signature::from_slice(&signature_bytes).expect("response is not a signature");
-    match verifying_key.verify(&random_bytes, &signature) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    verifying_key.verify(&random_bytes, &signature).is_ok()
 }

@@ -20,8 +20,12 @@ pub fn generate_and_save_private_key(path: &Path) -> Result<SigningKey> {
 }
 
 pub fn load_private_key(path: &Path) -> Result<SigningKey> {
-    let bytes = fs::read(path)?;
+    let mut bytes = fs::read(path)?;
 
-    Ok(SigningKey::from_bytes(&bytes.try_into().map_err(|_| "invalid key length")?))
+    while bytes.last() == Some(&b'\n') || bytes.last() == Some(&b'\r') || bytes.last() == Some(&b' ') {
+        bytes.pop();
+    }
+
+    Ok(SigningKey::from_bytes(&bytes.try_into().map_err(|b: Vec<u8>| format!("Invalid key length: expected 32 bytes, got {}", b.len()))?))
 
 }
