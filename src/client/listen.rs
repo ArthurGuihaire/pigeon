@@ -1,11 +1,10 @@
 use std::{io::Write, path::{Path, PathBuf}, str::FromStr, time::Duration};
-use crate::constants::{DATA_DIR};
 use iroh::endpoint::{ConnectionError, RecvStream, SendStream};
 use n0_error::{Result, StackErrorExt, StdResultExt};
-use pigeon::FileHeader;
+use pigeon::{FileHeader, common::SECRET_KEY};
 use tokio::fs::File;
 
-use crate::common::{bind_endpoint, load_or_create_identity};
+use pigeon::common::bind_endpoint;
 
 async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     //first, ask for initial confirmation
@@ -54,8 +53,8 @@ async fn recv_file_chunks(recv_stream: &mut RecvStream, send_stream: &mut SendSt
 }
 
 pub async fn listen() -> Result<()> {
-    let secret_key = load_or_create_identity(&DATA_DIR)?;
-    let endpoint = bind_endpoint(secret_key).await?;
+    let secret_key = SECRET_KEY.get().expect("Failed to load secret key");
+    let endpoint = bind_endpoint(secret_key.clone()).await?;
 
     endpoint.online().await;
 

@@ -11,7 +11,8 @@ pub fn generate_and_save_private_key(path: &Path) -> Result<SigningKey> {
     let signing_key = SigningKey::generate(&mut rng);
 
     //save the key to file
-    fs::write(path, signing_key.to_bytes())?;
+    let signing_key_hex = hex::encode(signing_key.to_bytes());
+    fs::write(path, &signing_key_hex)?;
 
     println!("Created new key pair. Public key signature:");
     println!("{}", hex::encode(signing_key.verifying_key().as_bytes()));
@@ -20,7 +21,8 @@ pub fn generate_and_save_private_key(path: &Path) -> Result<SigningKey> {
 }
 
 pub fn load_private_key(path: &Path) -> Result<SigningKey> {
-    let mut bytes = fs::read(path)?;
+    let hex_bytes = fs::read(path)?;
+    let mut bytes = hex::decode(&hex_bytes).expect("file does not contain hex");
 
     while bytes.last() == Some(&b'\n') || bytes.last() == Some(&b'\r') || bytes.last() == Some(&b' ') {
         bytes.pop();

@@ -3,10 +3,10 @@ use std::path::Path;
 use arrayvec::ArrayString;
 use iroh::{EndpointAddr, PublicKey, endpoint::SendStream};
 use n0_error::{Result, StdResultExt};
-use pigeon::{FileHeader, constants::{DATA_DIR, CHUNK_SIZE}};
+use pigeon::{FileHeader, common::SECRET_KEY, constants::CHUNK_SIZE};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt}};
 
-use crate::common::{PIGEON_ALPN, USERNAME, bind_endpoint, load_or_create_identity};
+use pigeon::common::{PIGEON_ALPN, USERNAME, bind_endpoint};
 
 async fn generate_header(path: &Path) -> FileHeader {
     let filename = path.file_name().expect("Target path is not a file");
@@ -33,8 +33,8 @@ pub async fn send_file_chunks(send_stream: &mut SendStream, file_path: &Path) ->
 }
 
 pub async fn connect_and_send(target: &PublicKey, path: &Path) -> Result<()> {
-    let secret_key = load_or_create_identity(&DATA_DIR)?;
-    let endpoint = bind_endpoint(secret_key).await?;
+    let secret_key = SECRET_KEY.get().expect("Failed to load secret key");
+    let endpoint = bind_endpoint(secret_key.clone()).await?;
 
     endpoint.online().await;
 

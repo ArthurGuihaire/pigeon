@@ -3,19 +3,18 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use ed25519_dalek::{VerifyingKey, Verifier, Signature};
-use iroh::{Endpoint, PublicKey, SecretKey, endpoint::presets};
+use iroh::{Endpoint, PublicKey, SecretKey, Signature, endpoint::presets};
 use n0_error::{Result, StackResultExt, StdResultExt};
 use arrayvec::ArrayString;
-use pigeon::{GetKeyRequest, RegisterRequest};
-use pigeon::constants::{GETKEY_URL, REGISTER_URL, NAME_FILE, CLIENT_KEY_FILE};
+use crate::{GetKeyRequest, RegisterRequest};
+use crate::constants::{GETKEY_URL, REGISTER_URL, NAME_FILE};
 use rand::Rng;
 
 pub const PIGEON_ALPN: &[u8] = b"pigeon/0";
 pub static USERNAME: OnceLock<ArrayString<32>> = OnceLock::new();
+pub static SECRET_KEY: OnceLock<SecretKey> = OnceLock::new();
 
-pub fn try_load_name(path_prefix: &Path) -> Result<ArrayString<32>> {
-    let name_path = path_prefix.join(NAME_FILE);
+pub fn try_load_name(name_path: &Path) -> Result<ArrayString<32>> {
     if name_path.exists() {
         let name_bytes = std::fs::read(name_path).std_context("read name file")?;
         let name_arraystring: ArrayString<32> = ArrayString::from(&String::from_utf8(name_bytes).expect("Name file is not UTF-8").trim()).expect("Cannot convert name to arraystring");
@@ -50,13 +49,12 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey)
     return Ok(name_ararystring);
 }
 
-pub fn load_or_create_identity(path_prefix: &Path) -> Result<SecretKey> {
-    let key_path = path_prefix.join(CLIENT_KEY_FILE);
+pub fn load_or_create_identity(key_path: &Path) -> Result<SecretKey> {
+    println!("trying to load {}", key_path.display());
     if key_path.exists() {
         let key = std::fs::read(key_path).std_context("read identity file")?;
-        let mut key_bytes = [0u8; 32];
-        key_bytes.copy_from_slice(&key);
-        Ok(SecretKey::from_bytes(&key_bytes))
+        let key_bytes = hex::decode(key).expect("key file is not hex");
+        Ok(SecretKey::from_bytes(&key_bytes.try_into().unwrap()))
     } else {
         if let Some(parent) = key_path.parent()
             && !parent.as_os_str().is_empty()
@@ -65,7 +63,10 @@ pub fn load_or_create_identity(path_prefix: &Path) -> Result<SecretKey> {
         }
         let key = SecretKey::generate();
 
-        std::fs::write(key_path, key.to_bytes()).std_context("write identity file")?;
+        println!("Generated new key pair. public key signature: ");
+        println!("{}", hex::encode(key.public()));
+
+        std::fs::write(key_path, hex::encode(key.to_bytes())).std_context("write identity file")?;
         Ok(key)
     }
 }
@@ -163,15 +164,13 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
     }
 }
 
-pub async fn verify_server_identity(auth_url: &str, expected_public_key: &str) -> bool {
-    let pub_key_bytes = hex::decode(expected_public_key).expect("public key is not hex");
-    let verifying_key = VerifyingKey::from_bytes(&pub_key_bytes.try_into().expect("wrong public key length")).expect("cannot convert to verifying key");
+pub async fn verify_server_identity(auth_url: &str, expected_public_key: &PublicKey) -> bool {
     let mut random_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut random_bytes);
     let random_hex = hex::encode(&random_bytes);
     let client = reqwest::Client::new();
     let response: String = client.post(auth_url).json(&random_hex).send().await.expect("request failed").json().await.expect("cannot deserialize json");
     let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
-    let signature = Signature::from_slice(&signature_bytes).expect("response is not a signature");
-    verifying_key.verify(&random_bytes, &signature).is_ok()
+    let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
+    expected_public_key.verify(&random_bytes, &signature).is_ok()
 }

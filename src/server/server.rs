@@ -4,47 +4,32 @@ use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::routing::post;
-use ed25519_dalek::Signer;
 use iroh::PublicKey;
+use iroh::SecretKey;
+use iroh::Signature;
+use pigeon::AuthRequest;
+use pigeon::ChangeNameRequest;
 use pigeon::GetKeyRequest;
-use pigeon::constants::SERVER_KEY_FILE_1;
-use pigeon::constants::SERVER_KEY_FILE_2;
+use pigeon::constants::SERVER_KEY_FILE;
+use rand::Rng;
 use std::path::Path;
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use ed25519_dalek::{SigningKey};
 
 use pigeon::RegisterRequest;
-
-use crate::utils::{load_private_key, generate_and_save_private_key};
+use pigeon::common::load_or_create_identity;
 
 #[derive(Clone)]
 struct SharedState {
-    clients: Arc<Mutex<HashMap<ArrayString<32>, PublicKey>>>,
-    private_key: SigningKey,
+    clients: Arc<Mutex<HashMap<ArrayString<32>, (PublicKey, Option<[u8; 32]>)>>>,
+    private_key: SecretKey,
 }
-
-mod utils;
 
 #[tokio::main]
 async fn main() {
-    let key_path_1 = Path::new(SERVER_KEY_FILE_1);
-    let key_path_2 = Path::new(SERVER_KEY_FILE_2);
-    let result = load_private_key(&key_path_1);
-    let private_key = match result {
-        Ok(key) => key,
-        Err(e) => {
-            eprintln!("failed to load key: {e}");
-            match load_private_key(&key_path_2) {
-                Ok(key) => key,
-                Err(e) => {
-                    eprintln!("failed to load key: {e}");
-                    generate_and_save_private_key(&key_path_1).expect("failed to generate private key")
-                }
-            }
-        }
-    };
+    let key_path = Path::new(SERVER_KEY_FILE);
+    let private_key = load_or_create_identity(key_path).expect("failed to load or create key pair");
     let state = SharedState {
         clients: Arc::new(Mutex::new(HashMap::new())),
         private_key,
@@ -53,6 +38,8 @@ async fn main() {
         .route("/register", post(handle_registration))
         .route("/getkey", get(handle_key_request))
         .route("/auth", post(handle_auth))
+        .route("/start_auth", post(start_auth))
+        .route("/change_name", post(change_name))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
@@ -69,7 +56,7 @@ async fn handle_registration(
         Err((StatusCode::BAD_REQUEST, "that name is already registered"))
     }
     else {
-        db.insert(payload.name, payload.publickey);
+        db.insert(payload.name, (payload.publickey, None));
         Ok(StatusCode::CREATED)
     }
 }
@@ -82,7 +69,7 @@ async fn handle_key_request(
     let db = state.clients.lock().await;
     match db.get(&payload.target) {
         None => Err((StatusCode::BAD_REQUEST, format!("{} is not registered", &payload.target))),
-        Some(key) => Ok(Json(*key)),
+        Some(key) => Ok(Json(key.0)),
     }
 }
 
@@ -94,4 +81,53 @@ async fn handle_auth(
     let signature = state.private_key.sign(&bytes);
 
     Json(hex::encode(signature.to_bytes()))
+}
+
+async fn start_auth(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    axum::extract::Json(payload): axum::extract::Json<AuthRequest>) -> (StatusCode, String)
+{
+    let mut db = state.clients.lock().await;
+    let result = db.get_mut(&payload.name);
+    let entry = match result {
+        None => return (StatusCode::BAD_REQUEST, String::from("cannot change a name that is not registered")),
+        Some(val) => val,
+    };
+    entry.1 = Some([0u8; 32]);
+    rand::rng().fill_bytes(&mut entry.1.unwrap());
+    let challenge = hex::encode(&entry.1.unwrap());
+
+    (StatusCode::OK, challenge)
+}
+
+async fn change_name(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    axum::extract::Json(payload): axum::extract::Json<ChangeNameRequest>) -> StatusCode
+{
+    let mut db = state.clients.lock().await;
+    let result = db.get_mut(&payload.old_name);
+    let entry = match result {
+        None => return StatusCode::UNAUTHORIZED,
+        Some(val) => val,
+    };
+    let signature_bytes_result = hex::decode(payload.hex_signature);
+    let signature_bytes = match signature_bytes_result {
+        Err(e) => {
+            eprintln!("Server error: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        },
+        Ok(val) => val,
+    };
+    let result = entry.0.verify(&entry.1.unwrap(), &Signature::from_bytes(&signature_bytes.try_into().unwrap()));
+    if result.is_err() {
+        return StatusCode::FORBIDDEN
+    }
+    let old_entry = db.remove(&payload.old_name);
+    match old_entry {
+        None => StatusCode::EXPECTATION_FAILED,
+        Some(entry) => {
+            db.insert(payload.new_name, entry);
+            StatusCode::OK
+        }
+    }
 }

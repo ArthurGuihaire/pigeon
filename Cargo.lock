@@ -2351,7 +2351,6 @@ dependencies = [
  "arrayvec",
  "axum",
  "directories",
- "ed25519-dalek",
  "hex",
  "iroh",
  "n0-error",
