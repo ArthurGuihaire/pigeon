@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use arrayvec::ArrayString;
+use async_compression::tokio::write::ZstdEncoder;
 use iroh::{EndpointAddr, PublicKey, endpoint::SendStream};
 use n0_error::{Result, StdResultExt};
-use pigeon::{FileHeader, common::SECRET_KEY, constants::CHUNK_SIZE};
+use pigeon::{FileHeader, common::SECRET_KEY};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt}};
 
 use pigeon::common::{PIGEON_ALPN, USERNAME, bind_endpoint};
@@ -21,14 +22,8 @@ async fn generate_header(path: &Path) -> FileHeader {
 
 pub async fn send_file_chunks(send_stream: &mut SendStream, file_path: &Path) -> Result<()> {
     let mut file = File::open(file_path).await?;
-    let mut buffer = [0u8; CHUNK_SIZE];
-    loop {
-        let n = file.read(&mut buffer).await?;
-        if n == 0 {
-            break;
-        }
-        send_stream.write_all(&buffer).await.anyerr()?;
-    }
+    let mut decompressed_stream = ZstdEncoder::new(send_stream);
+    tokio::io::copy(&mut file, &mut decompressed_stream).await?;
     Ok(())
 }
 

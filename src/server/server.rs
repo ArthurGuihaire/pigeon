@@ -122,11 +122,16 @@ async fn change_name(
     if result.is_err() {
         return StatusCode::FORBIDDEN
     }
+    let collision = db.contains_key(&payload.new_name);
+    if collision {
+        return StatusCode::BAD_REQUEST
+    }
     let old_entry = db.remove(&payload.old_name);
     match old_entry {
         None => StatusCode::EXPECTATION_FAILED,
         Some(entry) => {
             db.insert(payload.new_name, entry);
+            db.get_mut(&payload.new_name).unwrap().1 = None; //reset auth
             StatusCode::OK
         }
     }

@@ -1,9 +1,9 @@
 use std::{io::Write, path::{Path, PathBuf}, str::FromStr, time::Duration};
+use async_compression::tokio::write::ZstdDecoder;
 use iroh::endpoint::{ConnectionError, RecvStream, SendStream};
 use n0_error::{Result, StackErrorExt, StdResultExt};
 use pigeon::{FileHeader, common::SECRET_KEY};
-use tokio::fs::File;
-
+use tokio::{fs::File};
 use pigeon::common::bind_endpoint;
 
 async fn confirm_write(filename: &str, sender_name: &str) -> bool {
@@ -29,22 +29,22 @@ async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     }
     else { false }
 }
-
 async fn recv_file_chunks(recv_stream: &mut RecvStream, send_stream: &mut SendStream, file_path: &Path, expected_size: u64) -> Result<()> {
-    let mut file = File::create(file_path).await.expect("Failed to create file");
+    let file = File::create(file_path).await.expect("Failed to create file");
 
     send_stream.write_all(&[1]).await.anyerr()?;
     send_stream.finish().anyerr()?;
 
-    let bytes_copied = tokio::io::copy(recv_stream, &mut file).await;
+    let mut decompressed_file_stream = ZstdDecoder::new(file);
+
+    let bytes_copied = tokio::io::copy(recv_stream, &mut decompressed_file_stream).await;
     match bytes_copied {
         Ok(bytes_copied) => {
             if bytes_copied > expected_size {
-                eprintln!("Warning: more data written than expected, potentially corrupt file");
-                println!("expected size: {expected_size}, actual size: {bytes_copied}")
+                eprintln!("Warning: more data written ({bytes_copied}) than expected ({expected_size}), potentially corrupt file");
             }
             else if bytes_copied < expected_size {
-                eprintln!("Warning: less data written than expected, potentially corrupt file");
+                eprintln!("Warning: less data written ({bytes_copied}) than expected ({expected_size}), potentially corrupt file");
             }
             Ok(())
         }
@@ -73,8 +73,6 @@ pub async fn listen() -> Result<()> {
         tokio::spawn(async move {
             let (mut send, mut recv) = conn.accept_bi().await.anyerr()?;
 
-            // let message = recv.read_to_end(4096).await.anyerr()?;
-            // let message = String::from_utf8(message).anyerr()?;
             let header = recv.read_chunk(size_of::<FileHeader>()).await.anyerr()?.unwrap();
             let header: FileHeader = postcard::from_bytes(&header).anyerr()?;
 

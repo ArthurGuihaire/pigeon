@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 arrayvec = { version = "0.7", features = ["serde"] }
+async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 axum = "0.8"
 directories = "6.0"
 hex = "0.4"

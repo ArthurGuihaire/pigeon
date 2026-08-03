@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use iroh::{Endpoint, PublicKey, SecretKey, Signature, endpoint::presets};
 use n0_error::{Result, StackResultExt, StdResultExt};
-use arrayvec::ArrayString;
-use crate::{GetKeyRequest, RegisterRequest};
-use crate::constants::{GETKEY_URL, REGISTER_URL, NAME_FILE};
+use arrayvec::{ArrayString, CapacityError};
+use reqwest::StatusCode;
+use crate::{GetKeyRequest, RegisterRequest, AuthRequest, ChangeNameRequest};
+use crate::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTER_URL, START_AUTH_URL};
 use rand::Rng;
 
 pub const PIGEON_ALPN: &[u8] = b"pigeon/0";
@@ -25,28 +26,37 @@ pub fn try_load_name(name_path: &Path) -> Result<ArrayString<32>> {
     }
 }
 
-pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey) -> Result<ArrayString<32>> {
-    let name_path = path_prefix.join(NAME_FILE);
+pub async fn read_name() -> ArrayString<32> {
     let mut name_string = String::new();
-    let mut name_ararystring: ArrayString<32>;
-    print!("No name set. choose your name: ");
+    print!("Choose a new name: ");
     loop {
         let _ = std::io::stdout().flush();
         std::io::stdin().read_line(&mut name_string).expect("IO error while reading from stdin");
-        name_ararystring = ArrayString::from(&name_string.trim()).expect("bad stdin input");
-
-        let result = register_http(&name_ararystring, publickey).await;
-        if let Ok(_) = result {
-            break;
+        let result: Result<ArrayString<32>, CapacityError<&str>> = ArrayString::from(&name_string.trim());
+        if let Ok(name_arraystring) = result {
+            return name_arraystring;
         }
-        print!("choose a different name: ")
+        else {
+            println!("Something's wrong with that name, its probably too long");
+            print!("Choose a different name:")
+        }
     }
+}
+
+pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey) -> Result<ArrayString<32>> {
+    let name_path = path_prefix.join(NAME_FILE);
+    let name_arraystring = loop {
+        let potential_name = read_name().await;
+        let result = register_http(&potential_name, publickey).await;
+        if result.is_ok() { break potential_name }
+        else { println!("That name is taken"); }
+    };
 
     if let Some(parent) = name_path.parent() && !parent.as_os_str().is_empty() {
         std::fs::create_dir_all(parent).std_context("create config dir")?;
     }
-    std::fs::write(name_path, name_string.trim()).std_context("write name file")?;
-    return Ok(name_ararystring);
+    std::fs::write(name_path, name_arraystring.to_string()).std_context("write name file")?;
+    return Ok(name_arraystring);
 }
 
 pub fn load_or_create_identity(key_path: &Path) -> Result<SecretKey> {
@@ -116,7 +126,7 @@ pub async fn get_public_key(
     }
 }
 
-pub async fn user_get_public_key() -> PublicKey {
+pub async fn get_public_key_interactive() -> PublicKey {
     let mut buf = String::new();
     loop {
         print!("Target username: ");
@@ -173,4 +183,55 @@ pub async fn verify_server_identity(auth_url: &str, expected_public_key: &Public
     let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
     expected_public_key.verify(&random_bytes, &signature).is_ok()
+}
+
+pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> Result<()> {
+    let old_name = USERNAME.get().expect("Getting name failed").clone();
+    let auth_request = AuthRequest {
+        name: old_name,
+    };
+    let client = reqwest::Client::new();
+    let response = client.post(&*START_AUTH_URL).json(&auth_request).send().await.anyerr()?;
+    //for some reason getting .text moves the response??? so get status beforehand
+    let status = response.status();
+    let text = response.text().await.anyerr()?;
+    if status != StatusCode::OK {
+        eprintln!("Received error response: {}", text);
+        return Err("start_auth failed".into())
+    }
+
+    let challenge_bytes = hex::decode(&text).anyerr()?;
+    let signature = secret_key.sign(&challenge_bytes);
+    let change_name_request = ChangeNameRequest {
+        old_name,
+        new_name: *new_name,
+        hex_signature: hex::encode(&signature.to_bytes()),
+    };
+
+    let response = client.post(&*CHANGE_NAME_URL).json(&change_name_request).send().await.anyerr()?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED => return Err("Error: Unauthorized. must start auth first".into()),
+        StatusCode::INTERNAL_SERVER_ERROR => return Err("Error: Internal server error".into()),
+        StatusCode::FORBIDDEN => return Err("Error: Authentication failed".into()),
+        StatusCode::EXPECTATION_FAILED => return Err("Error: Expectation failed".into()),
+        StatusCode::OK => {}, // do nothing, let the function keep running
+        status_code => return Err(format!("Error: unexpected status code {}, something went very wrong", status_code).into()),
+    }
+
+    std::fs::write(DATA_DIR.join(NAME_FILE), new_name.to_string())?;
+
+    Ok(())
+}
+
+pub async fn change_name_interactive(secret_key: &SecretKey) -> Result<()> {
+    let new_name = loop {
+        let potential_name = read_name().await;
+        let result = get_public_key(&potential_name).await; // use get_public_key cause we actually know why it fails when it does
+        if let Err(err) = result && let Some(status) = err.status() && status == StatusCode::BAD_REQUEST {
+            break potential_name;
+        }
+        println!("That name is already taken, or a different error occured");
+    };
+
+    change_name(&new_name, secret_key).await
 }

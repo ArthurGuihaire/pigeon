@@ -5,12 +5,12 @@ use n0_error::{Result, StdResultExt};
 mod connect;
 mod listen;
 
-use pigeon::common::{SECRET_KEY, create_name_and_register, load_or_create_identity, try_load_name};
+use pigeon::common::{SECRET_KEY, change_name_interactive, create_name_and_register, load_or_create_identity, try_load_name};
 use listen::listen;
 use connect::connect_and_send;
 use pigeon::constants::{self, AUTH_URL, SERVER_PUBLIC_KEY};
 
-use pigeon::common::{get_public_key, register_http, user_get_public_key, verify_server_identity};
+use pigeon::common::{get_public_key, register_http, get_public_key_interactive, verify_server_identity};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,13 +53,17 @@ async fn main() -> Result<()> {
         if arg_string.starts_with("--") {
             let option_string = arg_string.get(2..).unwrap();
             match option_string {
-                "change-name" => println!("change name detected"),
-                _ => {}
+                "change-name" => {
+                    change_name_interactive(SECRET_KEY.get().expect("failed to get private key")).await.expect("failed to change name");
+                },
+                _ => {
+                    eprintln!("option not recognized, exiting");
+                }
             }
         }
         else {
             let send_path = PathBuf::from(arg_string);
-            let target_key = user_get_public_key().await;
+            let target_key = get_public_key_interactive().await;
             connect_and_send(&target_key, &send_path).await.unwrap();
         }
     }
