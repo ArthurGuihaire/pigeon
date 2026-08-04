@@ -33,7 +33,7 @@ pub async fn connect_and_send(target: &PublicKey, path: &Path) -> Result<()> {
     let secret_key = SECRET_KEY.get().expect("Failed to load secret key");
     let endpoint = bind_endpoint(secret_key.clone()).await?;
 
-    endpoint.online().await;
+    // endpoint.online().await;
 
     let addr = EndpointAddr::from_parts(target.clone(), []);
     let conn = endpoint.connect(addr, PIGEON_ALPN).await?;

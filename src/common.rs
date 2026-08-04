@@ -82,12 +82,12 @@ pub fn load_or_create_identity(key_path: &Path) -> Result<SecretKey> {
     }
 }
 
-/// Binds an endpoint with preset N0
+/// Binds an endpoint with given preset
 pub async fn bind_endpoint(secret_key: SecretKey) -> Result<Endpoint> {
     Endpoint::builder(presets::N0)
-        .address_lookup(MdnsAddressLookup::builder())
         .secret_key(secret_key)
         .alpns(vec![PIGEON_ALPN.to_vec()])
+        .address_lookup(MdnsAddressLookup::builder())
         .bind()
         .await
         .context("bind endpoint")

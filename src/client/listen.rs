@@ -62,7 +62,7 @@ pub async fn listen() -> Result<()> {
     let secret_key = SECRET_KEY.get().expect("Failed to load secret key");
     let endpoint = bind_endpoint(secret_key.clone()).await?;
 
-    endpoint.online().await;
+    // endpoint.online().await;
 
     let accepting = loop {
        match endpoint.accept().await {
