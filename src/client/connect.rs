@@ -45,24 +45,19 @@ pub async fn connect_and_send(target: &PublicKey, path: &Path) -> Result<()> {
     send.write_all(&header_message).await.anyerr()?;
     send.flush().await.anyerr()?;
 
-    println!("waiting for confirmation");
     let response = recv.read_u8().await?;
     if response == 1 {
-        println!("sending file");
         send_file_chunks(&mut send, path).await?;
     }
-    println!("calling finish");
     send.finish().anyerr()?;
-    println!("calling flush");
     send.flush().await?;
 
-    println!("waiting for ack");
     let ack = recv.read_u8().await?;
     if ack == 2 {
-        println!("probably succeeded");
+        println!("File sent successfully")
     }
     else {
-        eprintln!("expected ACK 2, got {ack}");
+        eprintln!("Error: Invalid acknowledgement received. Something almost certainly went wrong.")
     }
 
     endpoint.close().await;
