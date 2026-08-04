@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         else {
             let send_path = PathBuf::from(arg_string);
             let target_key = get_public_key_interactive().await;
-            connect_and_send(&target_key, &send_path).await.unwrap();
+            connect_and_send(&target_key, &send_path).await?;
         }
     }
     else {

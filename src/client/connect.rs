@@ -22,8 +22,10 @@ async fn generate_header(path: &Path) -> FileHeader {
 
 pub async fn send_file_chunks(send_stream: &mut SendStream, file_path: &Path) -> Result<()> {
     let mut file = File::open(file_path).await?;
-    let mut decompressed_stream = ZstdEncoder::new(send_stream);
-    tokio::io::copy(&mut file, &mut decompressed_stream).await?;
+    let mut compressed_stream = ZstdEncoder::new(send_stream);
+    tokio::io::copy(&mut file, &mut compressed_stream).await?;
+    compressed_stream.flush().await?;
+    // tokio::io::copy(&mut file, send_stream).await?;
     Ok(())
 }
 
@@ -43,12 +45,25 @@ pub async fn connect_and_send(target: &PublicKey, path: &Path) -> Result<()> {
     send.write_all(&header_message).await.anyerr()?;
     send.flush().await.anyerr()?;
 
+    println!("waiting for confirmation");
     let response = recv.read_u8().await?;
     if response == 1 {
+        println!("sending file");
         send_file_chunks(&mut send, path).await?;
     }
-
+    println!("calling finish");
     send.finish().anyerr()?;
+    println!("calling flush");
+    send.flush().await?;
+
+    println!("waiting for ack");
+    let ack = recv.read_u8().await?;
+    if ack == 2 {
+        println!("probably succeeded");
+    }
+    else {
+        eprintln!("expected ACK 2, got {ack}");
+    }
 
     endpoint.close().await;
     Ok(())

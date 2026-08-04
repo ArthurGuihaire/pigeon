@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use iroh::{Endpoint, PublicKey, SecretKey, Signature, endpoint::presets};
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 use n0_error::{Result, StackResultExt, StdResultExt};
 use arrayvec::{ArrayString, CapacityError};
 use reqwest::StatusCode;
@@ -84,6 +85,7 @@ pub fn load_or_create_identity(key_path: &Path) -> Result<SecretKey> {
 /// Binds an endpoint with preset N0
 pub async fn bind_endpoint(secret_key: SecretKey) -> Result<Endpoint> {
     Endpoint::builder(presets::N0)
+        .address_lookup(MdnsAddressLookup::builder())
         .secret_key(secret_key)
         .alpns(vec![PIGEON_ALPN.to_vec()])
         .bind()
