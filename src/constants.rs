@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::LazyLock}; // Standard library in modern Rust
 use directories::ProjectDirs;
 
 static SERVER_URL: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("SERVER_URL").expect("SERVER_URL not set, failing")
+    std::env::var("SERVER_URL").unwrap_or(String::from("https://pigeon-87r8.onrender.com"))
 });
 pub static REGISTER_URL: LazyLock<String> = LazyLock::new(|| {
     format!("{}/register", *SERVER_URL)
@@ -34,3 +34,5 @@ pub const CLIENT_KEY_FILE: &str = "ed25519_key";
 pub const SERVER_KEY_FILE: &str = "ed25519_signing_key";
 
 pub const SERVER_PUBLIC_KEY: &str = "616b8ece0c39df9fa236484181f620ba410f8c7cd15f2862d137e1a35de15ce8";
+
+pub const CHUNK_SIZE: usize = 64 * 1024;

@@ -1,52 +1,72 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use iroh::PublicKey;
 use n0_error::{Result, StdResultExt};
 
 mod connect;
 mod listen;
+mod mdns;
+mod utils;
 
-use pigeon::common::{SECRET_KEY, change_name_interactive, create_name_and_register, load_or_create_identity, try_load_name};
+use pigeon::common::{SECRET_KEY, MDNS_USERNAME, ONLINE_USERNAME, change_name_interactive, create_name_and_register, load_or_create_identity, try_load_name};
 use listen::listen;
-use connect::connect_and_send;
 use pigeon::constants::{self, AUTH_URL, SERVER_PUBLIC_KEY};
 
-use pigeon::common::{get_public_key, register_http, get_public_key_interactive, verify_server_identity};
+use pigeon::common::{get_public_key, register_http, verify_server_identity};
+
+use crate::listen::create_endpoint;
+use crate::mdns::exchange_info_mdns;
+use crate::utils::{DiscoveryType, get_public_key_interactive};
+use crate::connect::connect_and_send;
+
+pub static USE_SERVER: OnceLock<bool> = OnceLock::new();
+
+async fn online_thread() -> Result<()> {
+    let server_authenticity = verify_server_identity(&AUTH_URL, &PublicKey::from_bytes(&hex::decode(SERVER_PUBLIC_KEY).anyerr()?.try_into().unwrap())?).await.inspect_err(|_| { let _ = USE_SERVER.set(false); } )?;
+    if !server_authenticity { let _ = USE_SERVER.set(false); return Err("Server authenticity cannot be established, using only mdns".into()); }
+
+    USE_SERVER.set(true).expect("Can't set USE_SERVER for some reason");
+
+    let current_username = MDNS_USERNAME.get().unwrap();
+    let key = SECRET_KEY.get().unwrap();
+    let result = get_public_key(&current_username).await;
+    match result {
+        Err(_) => {
+            register_http(&current_username, &key.public()).await.anyerr()?;
+        }
+        Ok(server_key) => {
+            if server_key == key.public() {
+                ONLINE_USERNAME.set(current_username.clone()).unwrap();
+            } else {
+                println!("Server and local public keys do not match, create a new identity");
+                ONLINE_USERNAME.set(create_name_and_register(&constants::DATA_DIR, &key.public(), true).await.anyerr()?).unwrap();
+            }
+        }
+    }
+
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let server_authenticity = verify_server_identity(&AUTH_URL, &PublicKey::from_bytes(&hex::decode(SERVER_PUBLIC_KEY).unwrap().try_into().unwrap()).unwrap()).await;
-    if !server_authenticity {
-        panic!("Server authenticity cannot be established");
-    }
     let key = load_or_create_identity(&constants::DATA_DIR.join(constants::CLIENT_KEY_FILE)).expect("Error: cannot load key");
     SECRET_KEY.set(key.clone()).expect("SECRET_KEY already set");
     let result = try_load_name(&constants::DATA_DIR.join(constants::NAME_FILE));
     let username = match result {
         Ok(username) => {
-            let result = get_public_key(&username).await;
-            match result {
-                Err(_) => {
-                    register_http(&username, &key.public()).await.anyerr()?;
-                    username
-                }
-                Ok(server_key) => {
-                    if server_key == key.public() {
-                        username
-                    }
-                    else {
-                        println!("Server and local public keys do not match, create a new identity");
-                        create_name_and_register(&constants::DATA_DIR, &key.public()).await.anyerr()?
-                    }
-                }
-            }
+            username
         },
         Err(_) => {
-            create_name_and_register(&constants::DATA_DIR, &key.public()).await.unwrap()
+            create_name_and_register(&constants::DATA_DIR, &key.public(), false).await?
         }
     };
-    pigeon::common::USERNAME.set(username).expect("USERNAME already set");
+    pigeon::common::MDNS_USERNAME.set(username).expect("USERNAME already set");
 
-    let join_handle = tokio::spawn(listen());
+    tokio::spawn(online_thread());
+
+    let endpoint = create_endpoint().await?;
+
+    let _mdns_lookup_thread = tokio::spawn(exchange_info_mdns(endpoint.clone()));
 
     let arg_string_option = std::env::args().nth(1);
     if let Some(arg_string) = arg_string_option {
@@ -54,7 +74,7 @@ async fn main() -> Result<()> {
             let option_string = arg_string.get(2..).unwrap();
             match option_string {
                 "change-name" => {
-                    change_name_interactive(SECRET_KEY.get().expect("failed to get private key")).await.expect("failed to change name");
+                    change_name_interactive(SECRET_KEY.get().unwrap()).await?;
                 },
                 _ => {
                     eprintln!("option not recognized, exiting");
@@ -63,12 +83,18 @@ async fn main() -> Result<()> {
         }
         else {
             let send_path = PathBuf::from(arg_string);
-            let target_key = get_public_key_interactive().await;
-            connect_and_send(&target_key, &send_path).await?;
+            // let target_key = if is_online { get_public_key_interactive().await } else { get_public_key_mdns_interactive().await };
+            let (target_key, discovery_type) = get_public_key_interactive().await;
+            let connect_name = match discovery_type {
+                DiscoveryType::MDNS => MDNS_USERNAME.get().unwrap(),
+                DiscoveryType::SERVER => ONLINE_USERNAME.get().unwrap(),
+            };
+            connect_and_send(&target_key, &send_path, connect_name).await?;
         }
     }
     else {
-        join_handle.await.expect("something went wrong").expect("something went wrong");
+        listen(&endpoint).await?;
+        // join_handle.await.expect("something went wrong").expect("something went wrong");
     }
 
     Ok(())

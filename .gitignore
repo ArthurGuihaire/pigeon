@@ -17,3 +17,6 @@ target
 username.txt
 ed25519_signing_key
 ed25519_key
+
+# Dumb scripts
+count-lines.py

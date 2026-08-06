@@ -18,6 +18,7 @@ rand = "0.10"
 reqwest = { version = "0.13", features = ["json"] }
 serde = "1.0"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
+tqdm = "0.8"
 
 [[bin]]
 name = "client"

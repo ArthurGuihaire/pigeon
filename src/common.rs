@@ -4,7 +4,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use iroh::{Endpoint, PublicKey, SecretKey, Signature, endpoint::presets};
-use iroh_mdns_address_lookup::MdnsAddressLookup;
 use n0_error::{Result, StackResultExt, StdResultExt};
 use arrayvec::{ArrayString, CapacityError};
 use reqwest::StatusCode;
@@ -13,7 +12,8 @@ use crate::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTE
 use rand::Rng;
 
 pub const PIGEON_ALPN: &[u8] = b"pigeon/0";
-pub static USERNAME: OnceLock<ArrayString<32>> = OnceLock::new();
+pub static MDNS_USERNAME: OnceLock<ArrayString<32>> = OnceLock::new();
+pub static ONLINE_USERNAME: OnceLock<ArrayString<32>> = OnceLock::new();
 pub static SECRET_KEY: OnceLock<SecretKey> = OnceLock::new();
 
 pub fn try_load_name(name_path: &Path) -> Result<ArrayString<32>> {
@@ -39,18 +39,21 @@ pub async fn read_name() -> ArrayString<32> {
         }
         else {
             println!("Something's wrong with that name, its probably too long");
-            print!("Choose a different name:")
+            print!("Choose a different name: ");
         }
     }
 }
 
-pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey) -> Result<ArrayString<32>> {
+pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey, is_online: bool) -> Result<ArrayString<32>> {
     let name_path = path_prefix.join(NAME_FILE);
     let name_arraystring = loop {
         let potential_name = read_name().await;
-        let result = register_http(&potential_name, publickey).await;
-        if result.is_ok() { break potential_name }
-        else { println!("That name is taken"); }
+        if is_online {
+            let result = register_http(&potential_name, publickey).await;
+            if result.is_ok() { break potential_name }
+            else { println!("That name is taken"); }
+        }
+        else { break potential_name }
     };
 
     if let Some(parent) = name_path.parent() && !parent.as_os_str().is_empty() {
@@ -87,7 +90,6 @@ pub async fn bind_endpoint(secret_key: SecretKey) -> Result<Endpoint> {
     Endpoint::builder(presets::N0)
         .secret_key(secret_key)
         .alpns(vec![PIGEON_ALPN.to_vec()])
-        .address_lookup(MdnsAddressLookup::builder())
         .bind()
         .await
         .context("bind endpoint")
@@ -128,21 +130,6 @@ pub async fn get_public_key(
     }
 }
 
-pub async fn get_public_key_interactive() -> PublicKey {
-    let mut buf = String::new();
-    loop {
-        print!("Target username: ");
-        let _ = std::io::stdout().flush();
-        let _ = std::io::stdin().read_line(&mut buf).expect("IO error while reading from stdin");
-        let name: ArrayString<32> = ArrayString::from(buf.trim()).unwrap();
-        let result = get_public_key(&name).await;
-        match result {
-            Ok(key) => return key,
-            Err(e) => { eprintln!("Error getting public key for target: {e}") }
-        }
-    }
-}
-
 pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Result<(), reqwest::Error> {
     let client = reqwest::Client::new();
 
@@ -176,19 +163,19 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
     }
 }
 
-pub async fn verify_server_identity(auth_url: &str, expected_public_key: &PublicKey) -> bool {
+pub async fn verify_server_identity(auth_url: &str, expected_public_key: &PublicKey) -> Result<bool> {
     let mut random_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut random_bytes);
     let random_hex = hex::encode(&random_bytes);
     let client = reqwest::Client::new();
-    let response: String = client.post(auth_url).json(&random_hex).send().await.expect("request failed").json().await.expect("cannot deserialize json");
+    let response: String = client.post(auth_url).json(&random_hex).send().await.anyerr()?.json().await.anyerr()?;
     let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
-    expected_public_key.verify(&random_bytes, &signature).is_ok()
+    Ok(expected_public_key.verify(&random_bytes, &signature).is_ok())
 }
 
 pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> Result<()> {
-    let old_name = USERNAME.get().expect("Getting name failed").clone();
+    let old_name = ONLINE_USERNAME.get().expect("Cannot change online username unless you are connected to the internet").clone();
     let auth_request = AuthRequest {
         name: old_name,
     };
