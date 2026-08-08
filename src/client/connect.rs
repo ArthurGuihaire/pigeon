@@ -2,12 +2,12 @@ use std::path::Path;
 
 use arrayvec::ArrayString;
 use async_compression::tokio::write::ZstdEncoder;
-use iroh::{EndpointAddr, PublicKey, endpoint::SendStream};
+use iroh::{Endpoint, endpoint::{SendStream, VarInt}, endpoint_info::EndpointInfo};
 use n0_error::{Result, StdResultExt};
-use pigeon::{FileHeader, common::SECRET_KEY, constants::CHUNK_SIZE};
+use pigeon::{FileHeader, constants::CHUNK_SIZE};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt}};
 
-use pigeon::common::{PIGEON_ALPN, bind_endpoint};
+use pigeon::common::PIGEON_ALPN;
 
 async fn generate_header(path: &Path, sender_username: &ArrayString<32>) -> FileHeader {
     let filename = path.file_name().expect("Target path is not a file");
@@ -37,15 +37,8 @@ pub async fn send_file_chunks(send_stream: &mut SendStream, file_path: &Path, ex
     Ok(())
 }
 
-pub async fn connect_and_send(target: &PublicKey, path: &Path, sender_username: &ArrayString<32>) -> Result<()> {
-    let secret_key = SECRET_KEY.get().expect("Failed to load secret key");
-    let endpoint = bind_endpoint(secret_key.clone()).await?;
-
-    // endpoint.online().await;
-
-    let addr = EndpointAddr::from_parts(target.clone(), []);
-    let conn = endpoint.connect(addr, PIGEON_ALPN).await?;
-
+pub async fn connect_and_send(endpoint: &Endpoint, target: &EndpointInfo, path: &Path, sender_username: &ArrayString<32>) -> Result<()> {
+    let conn = endpoint.connect(target.clone(), PIGEON_ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
 
     //send stream type 0
@@ -65,11 +58,8 @@ pub async fn connect_and_send(target: &PublicKey, path: &Path, sender_username: 
 
     let response = recv.read_u8().await?;
     if response == 1 {
-        //this shuts down the inner
         send_file_chunks(&mut send, path, header.size).await?;
     }
-    // send.finish().anyerr()?;
-    // send.flush().await?;
 
     let ack = recv.read_u8().await?;
     if ack == 2 {
@@ -79,6 +69,7 @@ pub async fn connect_and_send(target: &PublicKey, path: &Path, sender_username: 
         eprintln!("Error: Invalid acknowledgement received. Something almost certainly went wrong.")
     }
 
-    endpoint.close().await;
+    conn.close(VarInt::from(0u32), b"");
+
     Ok(())
 }

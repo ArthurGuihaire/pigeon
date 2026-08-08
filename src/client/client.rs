@@ -14,9 +14,9 @@ use pigeon::constants::{self, AUTH_URL, SERVER_PUBLIC_KEY};
 
 use pigeon::common::{get_public_key, register_http, verify_server_identity};
 
-use crate::listen::create_endpoint;
+use crate::utils::create_endpoint;
 use crate::mdns::exchange_info_mdns;
-use crate::utils::{DiscoveryType, get_public_key_interactive};
+use crate::utils::{DiscoveryType, get_endpoint_info_interactive};
 use crate::connect::connect_and_send;
 
 pub static USE_SERVER: OnceLock<bool> = OnceLock::new();
@@ -44,6 +44,8 @@ async fn online_thread() -> Result<()> {
         }
     }
 
+    println!("online thread finished");
+
     Ok(())
 }
 
@@ -62,11 +64,12 @@ async fn main() -> Result<()> {
     };
     pigeon::common::MDNS_USERNAME.set(username).expect("USERNAME already set");
 
-    tokio::spawn(online_thread());
+    let online_thread = tokio::spawn(online_thread());
 
     let endpoint = create_endpoint().await?;
 
-    let _mdns_lookup_thread = tokio::spawn(exchange_info_mdns(endpoint.clone()));
+    let mdns_lookup_thread = tokio::spawn(exchange_info_mdns(endpoint.clone()));
+    let listen_thread = tokio::spawn(listen(endpoint.clone()));
 
     let arg_string_option = std::env::args().nth(1);
     if let Some(arg_string) = arg_string_option {
@@ -84,18 +87,32 @@ async fn main() -> Result<()> {
         else {
             let send_path = PathBuf::from(arg_string);
             // let target_key = if is_online { get_public_key_interactive().await } else { get_public_key_mdns_interactive().await };
-            let (target_key, discovery_type) = get_public_key_interactive().await;
+            let (target_info, discovery_type) = get_endpoint_info_interactive().await;
             let connect_name = match discovery_type {
                 DiscoveryType::MDNS => MDNS_USERNAME.get().unwrap(),
                 DiscoveryType::SERVER => ONLINE_USERNAME.get().unwrap(),
             };
-            connect_and_send(&target_key, &send_path, connect_name).await?;
+            connect_and_send(&endpoint, &target_info, &send_path, connect_name).await?;
+
+            if !listen_thread.is_finished() { listen_thread.abort(); }
         }
     }
     else {
-        listen(&endpoint).await?;
-        // join_handle.await.expect("something went wrong").expect("something went wrong");
+        listen_thread.await.anyerr()??;
     }
 
-    Ok(())
+    if !mdns_lookup_thread.is_finished() {
+        mdns_lookup_thread.abort();
+        let _ = mdns_lookup_thread.await;
+    }
+    if !online_thread.is_finished() {
+        online_thread.abort();
+        let _ = online_thread.await;
+    }
+
+    endpoint.close().await;
+
+    println!("everything is done running, should exit now");
+
+    return Ok(())
 }

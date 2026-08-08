@@ -1,12 +1,11 @@
-use std::{io::Write, path::{Path, PathBuf}, str::FromStr, time::Duration};
+use std::{io::Write, path::{Path, PathBuf}, str::FromStr};
 use async_compression::tokio::bufread::ZstdDecoder;
-use iroh::{Endpoint, endpoint::{Connection, ConnectionError, RecvStream, SendStream}};
+use iroh::{Endpoint, endpoint::{Connection, RecvStream, SendStream}};
 use n0_error::{Result, StdResultExt, anyerr};
-use pigeon::{FileHeader, common::SECRET_KEY, constants::CHUNK_SIZE};
+use pigeon::{FileHeader, constants::CHUNK_SIZE};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt, BufReader}};
-use pigeon::common::bind_endpoint;
 
-use crate::mdns::exchange_usernames;
+use crate::{mdns::exchange_usernames, utils::{get_endpoint_info, safe_wait_connection_closed}};
 
 async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     //first, ask for initial confirmation
@@ -25,6 +24,7 @@ async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     println!("{filename} exists already");
     print!("Overwrite {filename}? (y/N) ");
     let _ = std::io::stdout().flush();
+    input.clear();
     if std::io::stdin().read_line(&mut input).is_ok() {
         let trimmed = input.trim();
         trimmed.starts_with('y') || trimmed.starts_with('Y')
@@ -61,21 +61,11 @@ async fn recv_file_chunks(recv_stream: &mut RecvStream, file_path: &Path, expect
     Ok(())
 }
 
-pub async fn create_endpoint() -> Result<Endpoint> {
-    let secret_key = SECRET_KEY.get().expect("Failed to load secret key");
-    let endpoint = bind_endpoint(secret_key.clone()).await?;
-
-    // if is_online {
-    //     endpoint.online().await;
-    // }
-    Ok(endpoint)
-}
-
-pub async fn listen(endpoint: &Endpoint) -> Result<()> {
+pub async fn listen(endpoint: Endpoint) -> Result<()> {
     loop {
         let conn = loop {
-        match endpoint.accept().await {
-            Some(incoming) =>  {
+            match endpoint.accept().await {
+                Some(incoming) =>  {
                     match incoming.accept() {
                         Ok(accepting) => break accepting.await?,
                         Err(err) => {
@@ -89,15 +79,22 @@ pub async fn listen(endpoint: &Endpoint) -> Result<()> {
         };
 
         let (mut send, mut recv) = conn.accept_bi().await.anyerr()?;
+        println!("accepted connection");
         let stream_type = recv.read_u8().await?;
+        println!("stream type {stream_type}");
         match stream_type {
             0 => return receive_file_connection(&mut send, &mut recv, &conn).await,
-            1 => { exchange_usernames(&mut send, &mut recv, conn.remote_id()).await? },
+            1 => {
+                exchange_usernames(&mut send, &mut recv, get_endpoint_info(&conn, &endpoint).await?).await?;
+                safe_wait_connection_closed(&conn).await;
+            },
             _ => return Err(anyerr!("unknown stream type: {}", stream_type))
         }
+
     }
 }
 pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStream, conn: &Connection) -> Result<()> {
+    println!("receiving file");
     let header_size = recv.read_u64().await?;
 
     let mut buf = vec![0u8; header_size as usize];
@@ -122,17 +119,7 @@ pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStrea
         println!("Not receiving file");
     }
 
-    let remote_id = conn.remote_id();
-    let res = tokio::time::timeout(Duration::from_secs(3), async move {
-        let closed = conn.closed().await;
-        if !matches!(closed, ConnectionError::ApplicationClosed(_)) {
-            println!("{remote_id} disconnected with an error: {closed:#}");
-        }
-    })
-    .await;
-    if res.is_err() {
-        println!("{remote_id} did not disconnect within 3 seconds");
-    }
+    safe_wait_connection_closed(conn).await;
 
     Ok::<(), n0_error::AnyError>(())
 }
