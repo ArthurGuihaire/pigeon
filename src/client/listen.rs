@@ -106,17 +106,19 @@ pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStrea
         send.write_all(&[1]).await.expect("failed to send confirmation");
         recv_file_chunks(recv, &PathBuf::from_str(&header.filename).unwrap(), header.size).await?;
         send.write_all(&[2]).await.expect("failed to send ACK");
-        send.finish().anyerr()?;
-        match send.stopped().await {
-            Ok(None) => {},
-            Ok(Some(val)) => eprintln!("Error (stopped returned Ok(Some(val))): {val}"),
-            Err(e) => eprintln!("Error (stopped returned Err(e)): {e}"),
-        }
         println!("Finished receiving file");
     }
     else {
         send.write_all(&[0]).await.expect("failed to send confirmation");
         println!("Not receiving file");
+    }
+
+    send.finish().anyerr()?;
+    send.flush().await?;
+    match send.stopped().await {
+        Ok(None) => {},
+        Ok(Some(val)) => eprintln!("Error (stopped returned Ok(Some(val))): {val}"),
+        Err(e) => eprintln!("Error (stopped returned Err(e)): {e}"),
     }
 
     safe_wait_connection_closed(conn).await;

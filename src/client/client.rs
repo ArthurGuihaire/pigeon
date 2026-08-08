@@ -94,7 +94,10 @@ async fn main() -> Result<()> {
             };
             connect_and_send(&endpoint, &target_info, &send_path, connect_name).await?;
 
-            if !listen_thread.is_finished() { listen_thread.abort(); }
+            if !listen_thread.is_finished() {
+                listen_thread.abort();
+                let _ = listen_thread.await;
+            }
         }
     }
     else {

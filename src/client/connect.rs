@@ -59,14 +59,14 @@ pub async fn connect_and_send(endpoint: &Endpoint, target: &EndpointInfo, path: 
     let response = recv.read_u8().await?;
     if response == 1 {
         send_file_chunks(&mut send, path, header.size).await?;
-    }
 
-    let ack = recv.read_u8().await?;
-    if ack == 2 {
-        println!("File sent successfully")
-    }
-    else {
-        eprintln!("Error: Invalid acknowledgement received. Something almost certainly went wrong.")
+        let ack = recv.read_u8().await?;
+        if ack == 2 {
+            println!("File sent successfully")
+        }
+        else {
+            eprintln!("Error: Invalid acknowledgement received. Something almost certainly went wrong.")
+        }
     }
 
     conn.close(VarInt::from(0u32), b"");
