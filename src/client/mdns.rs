@@ -6,6 +6,7 @@ use n0_error::{AnyError, Result, StdResultExt};
 use n0_future::StreamExt;
 use pigeon::common::{PIGEON_ALPN, MDNS_USERNAME};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::RwLock};
+use crate::debug_print_above;
 
 pub static MDNS_USERS: OnceLock<RwLock<HashMap<ArrayString<32>, EndpointInfo>>> = OnceLock::new();
 
@@ -17,7 +18,7 @@ pub async fn exchange_usernames(send: &mut SendStream, recv: &mut RecvStream, ta
 
         let name = ArrayString::from_str(str::from_utf8(&buf[..size]).anyerr()?).anyerr()?;
         let result = MDNS_USERS.get().unwrap().write().await.insert(name, target);
-        if result.is_none() { println!("Mdns found user with name {name}"); }
+        if result.is_none() { debug_print_above!("Mdns found user with name {name}"); }
 
         Ok::<(), AnyError>(())
     };
@@ -39,13 +40,11 @@ pub async fn exchange_usernames(send: &mut SendStream, recv: &mut RecvStream, ta
 }
 
 async fn subscribe_mdns_events(mdns: &MdnsAddressLookup, endpoint: &Endpoint) -> Result<()> {
-    println!("trying to subscribe to mdns");
     let mut events = mdns.subscribe().await;
-    println!("subscribed to mdns events");
     while let Some(event) = events.next().await  {
         match event {
             DiscoveryEvent::Discovered { endpoint_info, .. } => {
-                println!("mdns discovered {:?}", endpoint_info);
+                debug_print_above!("mdns discovered {:?}", endpoint_info);
                 let conn = endpoint.connect(endpoint_info.endpoint_id, PIGEON_ALPN).await?;
                 let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
                 send.write_all(&[1]).await.anyerr()?;
@@ -53,9 +52,9 @@ async fn subscribe_mdns_events(mdns: &MdnsAddressLookup, endpoint: &Endpoint) ->
                 conn.close(VarInt::from_u32(0u32), b"");
             }
             DiscoveryEvent::Expired { endpoint_id } => {
-                println!("mdns expired: {endpoint_id}");
+                debug_print_above!("mdns expired: {endpoint_id}");
             }
-            _ => { println!("something weird happened") }
+            _ => { debug_print_above!("something weird happened") }
         }
     }
     Ok(())

@@ -8,13 +8,11 @@ mod listen;
 mod mdns;
 mod utils;
 
-use pigeon::common::{SECRET_KEY, MDNS_USERNAME, ONLINE_USERNAME, change_name_interactive, create_name_and_register, load_or_create_identity, try_load_name};
+use pigeon::common::{SECRET_KEY, MDNS_USERNAME, ONLINE_USERNAME, load_or_create_identity};
 use listen::listen;
 use pigeon::constants::{self, AUTH_URL, SERVER_PUBLIC_KEY};
 
-use pigeon::common::{get_public_key, register_http, verify_server_identity};
-
-use crate::utils::create_endpoint;
+use crate::utils::{get_public_key, register_http, verify_server_identity, create_endpoint, change_name_interactive, create_name_and_register, try_load_name};
 use crate::mdns::exchange_info_mdns;
 use crate::utils::{DiscoveryType, get_endpoint_info_interactive};
 use crate::connect::connect_and_send;
@@ -44,7 +42,7 @@ async fn online_thread() -> Result<()> {
         }
     }
 
-    println!("online thread finished");
+    debug_print_above!("online thread finished");
 
     Ok(())
 }

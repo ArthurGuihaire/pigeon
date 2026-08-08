@@ -5,7 +5,7 @@ use n0_error::{Result, StdResultExt, anyerr};
 use pigeon::{FileHeader, constants::CHUNK_SIZE};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt, BufReader}};
 
-use crate::{mdns::exchange_usernames, utils::{get_endpoint_info, safe_wait_connection_closed}};
+use crate::{debug_print_above, mdns::exchange_usernames, utils::{PRINT_BLOCKED, flush_print_queue, get_endpoint_info, safe_wait_connection_closed}};
 
 async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     //first, ask for initial confirmation
@@ -18,7 +18,9 @@ async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     }
     else { false };
     //if not confirmed, exit now
-    if !confirmed { return false };
+    if !confirmed {
+        return false
+    };
     //if confirmed and the file doesn't exist already, go
     if !PathBuf::from(filename).exists() { return true };
     println!("{filename} exists already");
@@ -29,8 +31,19 @@ async fn confirm_write(filename: &str, sender_name: &str) -> bool {
         let trimmed = input.trim();
         trimmed.starts_with('y') || trimmed.starts_with('Y')
     }
-    else { false }
+    else {
+        false
+    }
 }
+
+async fn confirm_write_safe(filename: &str, sender_name: &str) -> bool {
+    PRINT_BLOCKED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let value = confirm_write(filename, sender_name).await;
+    PRINT_BLOCKED.store(false, std::sync::atomic::Ordering::Relaxed);
+    flush_print_queue();
+    value
+}
+
 async fn recv_file_chunks(recv_stream: &mut RecvStream, file_path: &Path, expected_size: u64) -> Result<()> {
     let mut file = File::create(file_path).await.expect("Failed to create file");
 
@@ -79,9 +92,8 @@ pub async fn listen(endpoint: Endpoint) -> Result<()> {
         };
 
         let (mut send, mut recv) = conn.accept_bi().await.anyerr()?;
-        println!("accepted connection");
         let stream_type = recv.read_u8().await?;
-        println!("stream type {stream_type}");
+        debug_print_above!("accepted connection with stream type {stream_type}");
         match stream_type {
             0 => return receive_file_connection(&mut send, &mut recv, &conn).await,
             1 => {
@@ -94,7 +106,6 @@ pub async fn listen(endpoint: Endpoint) -> Result<()> {
     }
 }
 pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStream, conn: &Connection) -> Result<()> {
-    println!("receiving file");
     let header_size = recv.read_u64().await?;
 
     let mut buf = vec![0u8; header_size as usize];
@@ -102,7 +113,7 @@ pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStrea
     // let header = recv.(size_of::<FileHeader>()).await.anyerr()?.unwrap();
     let header: FileHeader = postcard::from_bytes(&buf).anyerr()?;
 
-    if confirm_write(&header.filename, &header.sender_name).await {
+    if confirm_write_safe(&header.filename, &header.sender_name).await {
         send.write_all(&[1]).await.expect("failed to send confirmation");
         recv_file_chunks(recv, &PathBuf::from_str(&header.filename).unwrap(), header.size).await?;
         send.write_all(&[2]).await.expect("failed to send ACK");
