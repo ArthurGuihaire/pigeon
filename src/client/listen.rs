@@ -5,35 +5,23 @@ use n0_error::{Result, StdResultExt, anyerr};
 use pigeon::{FileHeader, constants::CHUNK_SIZE};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt, BufReader}};
 
-use crate::{debug_print_above, mdns::exchange_usernames, utils::{PRINT_BLOCKED, flush_print_queue, get_endpoint_info, safe_wait_connection_closed}};
+use crate::{debug_print_above, mdns::exchange_usernames, utils::{PRINT_BLOCKED, flush_print_queue, get_endpoint_info, safe_input, safe_wait_connection_closed}};
 
 async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     //first, ask for initial confirmation
-    print!("Receive {filename} from {sender_name}? (y/N) ");
-    let _ = std::io::stdout().flush();
     let mut input = String::new();
-    let confirmed = if std::io::stdin().read_line(&mut input).is_ok() {
-        let trimmed = input.trim();
-        trimmed.starts_with('y') || trimmed.starts_with('Y')
-    }
-    else { false };
-    //if not confirmed, exit now
-    if !confirmed {
+    safe_input(&format!("Receive {filename} from {sender_name}? (y/N) "), &mut input);
+    let trimmed = input.trim();
+    if !(trimmed.starts_with('y') || trimmed.starts_with('Y')) {
         return false
-    };
+    }
     //if confirmed and the file doesn't exist already, go
     if !PathBuf::from(filename).exists() { return true };
     println!("{filename} exists already");
-    print!("Overwrite {filename}? (y/N) ");
-    let _ = std::io::stdout().flush();
     input.clear();
-    if std::io::stdin().read_line(&mut input).is_ok() {
-        let trimmed = input.trim();
-        trimmed.starts_with('y') || trimmed.starts_with('Y')
-    }
-    else {
-        false
-    }
+    safe_input(&format!("Overwrite {filename}? (y/N) "), &mut input);
+    let trimmed = input.trim();
+    trimmed.starts_with('y') || trimmed.starts_with('Y')
 }
 
 async fn confirm_write_safe(filename: &str, sender_name: &str) -> bool {

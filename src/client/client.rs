@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use iroh::PublicKey;
 use n0_error::{Result, StdResultExt};
+use clap::{Arg, Parser};
 
 mod connect;
 mod listen;
@@ -18,6 +19,14 @@ use crate::utils::{DiscoveryType, get_endpoint_info_interactive};
 use crate::connect::connect_and_send;
 
 pub static USE_SERVER: OnceLock<bool> = OnceLock::new();
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    send_file: Option<PathBuf>,
+    #[arg(short, long)]
+    change_name: bool,
+}
 
 async fn online_thread() -> Result<()> {
     let server_authenticity = verify_server_identity(&AUTH_URL, &PublicKey::from_bytes(&hex::decode(SERVER_PUBLIC_KEY).anyerr()?.try_into().unwrap())?).await.inspect_err(|_| { let _ = USE_SERVER.set(false); } )?;
@@ -49,6 +58,7 @@ async fn online_thread() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
     let key = load_or_create_identity(&constants::DATA_DIR.join(constants::CLIENT_KEY_FILE)).expect("Error: cannot load key");
     SECRET_KEY.set(key.clone()).expect("SECRET_KEY already set");
     let result = try_load_name(&constants::DATA_DIR.join(constants::NAME_FILE));
@@ -64,41 +74,33 @@ async fn main() -> Result<()> {
 
     let online_thread = tokio::spawn(online_thread());
 
+    if args.change_name {
+        //could technically use "key" but SECRET_KEY should be the single source of truth
+        return change_name_interactive(SECRET_KEY.get().unwrap()).await
+    }
+
     let endpoint = create_endpoint().await?;
 
     let mdns_lookup_thread = tokio::spawn(exchange_info_mdns(endpoint.clone()));
     let listen_thread = tokio::spawn(listen(endpoint.clone()));
 
-    let arg_string_option = std::env::args().nth(1);
-    if let Some(arg_string) = arg_string_option {
-        if arg_string.starts_with("--") {
-            let option_string = arg_string.get(2..).unwrap();
-            match option_string {
-                "change-name" => {
-                    change_name_interactive(SECRET_KEY.get().unwrap()).await?;
-                },
-                _ => {
-                    eprintln!("option not recognized, exiting");
-                }
-            }
-        }
-        else {
-            let send_path = PathBuf::from(arg_string);
-            // let target_key = if is_online { get_public_key_interactive().await } else { get_public_key_mdns_interactive().await };
-            let (target_info, discovery_type) = get_endpoint_info_interactive().await;
-            let connect_name = match discovery_type {
-                DiscoveryType::MDNS => MDNS_USERNAME.get().unwrap(),
-                DiscoveryType::SERVER => ONLINE_USERNAME.get().unwrap(),
-            };
-            connect_and_send(&endpoint, &target_info, &send_path, connect_name).await?;
+    if let Some(send_path) = args.send_file {
+        // let target_key = if is_online { get_public_key_interactive().await } else { get_public_key_mdns_interactive().await };
+        let (target_info, discovery_type) = get_endpoint_info_interactive().await;
+        let connect_name = match discovery_type {
+            DiscoveryType::MDNS => MDNS_USERNAME.get().unwrap(),
+            DiscoveryType::SERVER => ONLINE_USERNAME.get().unwrap(),
+        };
+        connect_and_send(&endpoint, &target_info, &send_path, connect_name).await?;
 
-            if !listen_thread.is_finished() {
-                listen_thread.abort();
-                let _ = listen_thread.await;
-            }
+        //don't need to listen anymore once done sending
+        if !listen_thread.is_finished() {
+            listen_thread.abort();
+            let _ = listen_thread.await;
         }
     }
     else {
+        //if not sending, wait for listen thread to properly finish
         listen_thread.await.anyerr()??;
     }
 

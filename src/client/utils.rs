@@ -20,6 +20,15 @@ use crate::mdns::get_endpoint_info_mdns;
 pub static PRINT_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 pub static PRINT_BLOCKED: atomic::AtomicBool = AtomicBool::new(false);
 
+pub fn safe_input(msg: &str, buf: &mut String) {
+    PRINT_BLOCKED.store(true, atomic::Ordering::Relaxed);
+    print!("{msg}");
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stdin().read_line(buf);
+    PRINT_BLOCKED.store(false, atomic::Ordering::Relaxed);
+    flush_print_queue();
+}
+
 pub fn safe_print(msg: &str) {
     if !(PRINT_BLOCKED.load(atomic::Ordering::Relaxed)) {
         println!("{msg}");
@@ -59,12 +68,7 @@ pub enum DiscoveryType {
 pub async fn get_endpoint_info_interactive() -> (EndpointInfo, DiscoveryType) {
     let mut buf = String::new();
     loop {
-        PRINT_BLOCKED.store(true, atomic::Ordering::Relaxed);
-        print!("Target username: ");
-        let _ = std::io::stdout().flush();
-        let _ = std::io::stdin().read_line(&mut buf).expect("IO error while reading from stdin");
-        PRINT_BLOCKED.store(false, atomic::Ordering::Relaxed);
-        flush_print_queue();
+        safe_input("Target username: ", &mut buf);
         let name: ArrayString<32> = ArrayString::from(buf.trim()).unwrap();
         let info_option_mdns = get_endpoint_info_mdns(&name).await;
         if let Some(info) = info_option_mdns { return (info, DiscoveryType::MDNS) }
@@ -78,6 +82,7 @@ pub async fn get_endpoint_info_interactive() -> (EndpointInfo, DiscoveryType) {
                 }
             }
         }
+        buf.clear();
     }
 }
 
@@ -127,17 +132,14 @@ pub fn try_load_name(name_path: &Path) -> Result<ArrayString<32>> {
 pub async fn read_name() -> ArrayString<32> {
     let mut name_string = String::new();
 
-    print!("Choose a new name: ");
     loop {
-        let _ = std::io::stdout().flush();
-        std::io::stdin().read_line(&mut name_string).expect("IO error while reading from stdin");
+        safe_input("Choose a new name: ", &mut name_string);
         let result: Result<ArrayString<32>, CapacityError<&str>> = ArrayString::from(&name_string.trim());
         if let Ok(name_arraystring) = result {
             return name_arraystring;
         }
         else {
             println!("Something's wrong with that name, its probably too long");
-            print!("Choose a different name: ");
         }
     }
 }
@@ -197,6 +199,8 @@ pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> 
 
     std::fs::write(DATA_DIR.join(NAME_FILE), new_name.to_string())?;
 
+    safe_print(&format!("Successfully changed name to {}", new_name));
+
     Ok(())
 }
 
@@ -229,7 +233,7 @@ pub async fn get_public_key(
                 let status = res.status();
                 if let Err(reqwest_err) = res.error_for_status_ref() {
                     let error_text = res.text().await?;
-                    println!("error response: {}: {}", status, error_text);
+                    debug_print_above!("error response: {}: {}", status, error_text);
 
                     return Err(reqwest_err);
                 }
@@ -264,7 +268,7 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
                 let status = res.status();
                 if let Err(reqwest_err) = res.error_for_status_ref() {
                     let error_text = res.text().await?;
-                    println!("error response: {}: {}", status, error_text);
+                    debug_print_above!("error response: {}: {}", status, error_text);
 
                     return Err(reqwest_err);
                 }
