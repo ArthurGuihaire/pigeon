@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use iroh::PublicKey;
 use n0_error::{Result, StdResultExt};
-use clap::{Arg, Parser};
+use clap::Parser;
 
 mod connect;
 mod listen;

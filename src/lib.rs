@@ -19,7 +19,18 @@ pub struct GetKeyRequest {
 pub struct FileHeader {
     pub size: u64,
     pub filename: ArrayString<256>,
-    pub sender_name: ArrayString<32>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FsTreeHeader {
+    pub dir_name: ArrayString<256>,
+    pub entries: Vec<DirectoryEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum DirectoryEntry {
+    Directory,
+    File,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -1,16 +1,17 @@
-use std::{io::Write, path::{Path, PathBuf}, str::FromStr};
+use std::{path::{Path, PathBuf}, str::FromStr};
+use arrayvec::ArrayString;
 use async_compression::tokio::bufread::ZstdDecoder;
 use iroh::{Endpoint, endpoint::{Connection, RecvStream, SendStream}};
 use n0_error::{Result, StdResultExt, anyerr};
-use pigeon::{FileHeader, constants::CHUNK_SIZE};
+use pigeon::{DirectoryEntry, FileHeader, FsTreeHeader, constants::CHUNK_SIZE};
 use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt, BufReader}};
 
-use crate::{debug_print_above, mdns::exchange_usernames, utils::{PRINT_BLOCKED, flush_print_queue, get_endpoint_info, safe_input, safe_wait_connection_closed}};
+use crate::{debug_print_above, mdns::exchange_usernames, utils::{get_endpoint_info, safe_input, safe_wait_connection_closed}};
 
-async fn confirm_write(filename: &str, sender_name: &str) -> bool {
+async fn confirm_write(filename: &str, num_files: u32, total_size_bytes: u64, sender_name: &str) -> bool {
     //first, ask for initial confirmation
     let mut input = String::new();
-    safe_input(&format!("Receive {filename} from {sender_name}? (y/N) "), &mut input);
+    safe_input(&format!("Receive {filename} ({num_files} file(s), {total_size_bytes} bytes total) from {sender_name}? (y/N) "), &mut input);
     let trimmed = input.trim();
     if !(trimmed.starts_with('y') || trimmed.starts_with('Y')) {
         return false
@@ -24,12 +25,39 @@ async fn confirm_write(filename: &str, sender_name: &str) -> bool {
     trimmed.starts_with('y') || trimmed.starts_with('Y')
 }
 
-async fn confirm_write_safe(filename: &str, sender_name: &str) -> bool {
-    PRINT_BLOCKED.store(true, std::sync::atomic::Ordering::Relaxed);
-    let value = confirm_write(filename, sender_name).await;
-    PRINT_BLOCKED.store(false, std::sync::atomic::Ordering::Relaxed);
-    flush_print_queue();
-    value
+async fn recv_fstree_serialized(recv_stream: &mut RecvStream, current_dir_path: &Path) -> Result<()> {
+    let header_size = recv_stream.read_u32().await? as usize;
+    let mut buf = vec![0u8; header_size];
+    recv_stream.read_exact(&mut buf).await.anyerr()?;
+
+    let header: FsTreeHeader = postcard::from_bytes(&buf).anyerr()?;
+    let dir_name = header.dir_name;
+    let new_dir_path = current_dir_path.join(Path::new(dir_name.as_str()));
+    std::fs::create_dir(&new_dir_path)?;
+
+    for subtree in header.entries {
+        match subtree {
+            DirectoryEntry::Directory => {
+                Box::pin(recv_fstree_serialized(recv_stream, &new_dir_path)).await?;
+            }
+            DirectoryEntry::File => {
+                recv_file_wrapper(recv_stream, &new_dir_path).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn recv_file_wrapper(recv_stream: &mut RecvStream, current_dir_path: &Path) -> Result<()> {
+    let header_size = recv_stream.read_u32().await.anyerr()? as usize;
+    debug_print_above!("prefix size: {}", header_size);
+    let mut buf = vec![0u8; header_size];
+    recv_stream.read_exact(&mut buf).await.anyerr()?;
+
+    let header: FileHeader = postcard::from_bytes(&buf).anyerr()?;
+    debug_print_above!("header: name: {}, size: {}", header.filename, header.size);
+    recv_file_chunks(recv_stream, &current_dir_path.join(header.filename), header.size).await
 }
 
 async fn recv_file_chunks(recv_stream: &mut RecvStream, file_path: &Path, expected_size: u64) -> Result<()> {
@@ -94,16 +122,29 @@ pub async fn listen(endpoint: Endpoint) -> Result<()> {
     }
 }
 pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStream, conn: &Connection) -> Result<()> {
-    let header_size = recv.read_u64().await?;
-
-    let mut buf = vec![0u8; header_size as usize];
+    let username_size = recv.read_u8().await?;
+    let mut buf = vec![0u8; username_size as usize];
     recv.read_exact(&mut buf).await.anyerr()?;
-    // let header = recv.(size_of::<FileHeader>()).await.anyerr()?.unwrap();
-    let header: FileHeader = postcard::from_bytes(&buf).anyerr()?;
+    let sender_name = ArrayString::<32>::from_str(str::from_utf8(&buf).anyerr()?).anyerr()?;
 
-    if confirm_write_safe(&header.filename, &header.sender_name).await {
+    let filename_size = recv.read_u32().await?;
+    let mut buf = vec![0u8; filename_size as usize];
+    recv.read_exact(&mut buf).await.anyerr()?;
+    let filename = String::from_utf8(buf).anyerr()?;
+
+    let total_size_bytes = recv.read_u64().await?;
+    let num_files = recv.read_u32().await?;
+
+    if confirm_write(&filename, num_files, total_size_bytes, &sender_name).await {
         send.write_all(&[1]).await.expect("failed to send confirmation");
-        recv_file_chunks(recv, &PathBuf::from_str(&header.filename).unwrap(), header.size).await?;
+        send.flush().await?;
+
+        if num_files == 1 {
+            recv_file_chunks(recv, &PathBuf::from_str(&filename).anyerr()?, total_size_bytes).await?;
+        }
+        else {
+            recv_fstree_serialized(recv, Path::new(".")).await?;
+        }
         send.write_all(&[2]).await.expect("failed to send ACK");
         println!("Finished receiving file");
     }

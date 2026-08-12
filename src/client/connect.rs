@@ -1,27 +1,126 @@
-use std::path::Path;
+use std::{os::unix::fs::MetadataExt, path::Path};
 
 use arrayvec::ArrayString;
 use async_compression::tokio::write::ZstdEncoder;
 use iroh::{Endpoint, endpoint::{SendStream, VarInt}, endpoint_info::EndpointInfo};
 use n0_error::{Result, StdResultExt};
-use pigeon::{FileHeader, constants::CHUNK_SIZE};
-use tokio::{fs::File, io::{AsyncReadExt, AsyncWriteExt}};
+use pigeon::{DirectoryEntry, FileHeader, FsTreeHeader, constants::CHUNK_SIZE};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, fs::File};
 
 use pigeon::common::PIGEON_ALPN;
 
-async fn generate_header(path: &Path, sender_username: &ArrayString<32>) -> FileHeader {
-    let filename = path.file_name().expect("Target path is not a file");
-    let file = File::open(path).await.expect("Failed to open target file");
+use crate::debug_print_above;
+
+async fn generate_file_header(file: &File, filename: &str) -> FileHeader {
     let length = file.metadata().await.expect("Failed to get file metadata").len();
     FileHeader {
         size: length,
-        filename: ArrayString::from(filename.to_str().unwrap()).unwrap(),
-        sender_name: sender_username.clone(),
+        filename: ArrayString::from(filename).unwrap(),
     }
 }
 
-pub async fn send_file_chunks(send_stream: &mut SendStream, file_path: &Path, expected_size: u64) -> Result<()> {
-    let mut file = File::open(file_path).await?;
+//info packet is name and size
+async fn send_request_information(path: &Path, send_stream: &mut SendStream, sender_username: &ArrayString<32>) -> Result<u64> {
+    let name_message = sender_username.as_bytes();
+    send_stream.write_u8(name_message.len() as u8).await?;
+    send_stream.write_all(name_message).await.anyerr()?; // send username string
+
+    let file_name = path.file_name().expect("Error: paths ending in . or .. are not supported yet").to_str().expect(&format!("Error: non-UTF-8 is platform dependent and cannot reliably be sent over the network (offending file path: {})", path.display()));
+    {
+        let dir_name_message = file_name.as_bytes();
+        let message_size = dir_name_message.len() as u32;
+        send_stream.write_u32(message_size).await?;
+        send_stream.write_all(&dir_name_message).await.anyerr()?;
+    }
+
+    if path.is_dir() {
+        let (total_size_bytes, num_files) = get_fstree_size(path).await?;
+        send_stream.write_u64(total_size_bytes).await?;
+        send_stream.write_u32(num_files).await?;
+        Ok(total_size_bytes)
+    }
+    else {
+        let total_size_bytes = File::open(path).await?.metadata().await?.size();
+        send_stream.write_u64(total_size_bytes).await?;
+        send_stream.write_u32(1u32).await?; // 1 file
+        Ok(total_size_bytes)
+    }
+}
+
+async fn get_fstree_size(dir_path: &Path) -> Result<(u64, u32)> {
+    let mut dir_size: u64 = 0;
+    let mut num_files: u32 = 1; //+1 for this directory
+    for entry in std::fs::read_dir(dir_path)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            let (inner_dir_size, inner_num_files) = Box::pin(get_fstree_size(&path)).await?;
+            dir_size += inner_dir_size;
+            num_files += inner_num_files;
+        }
+        else {
+            let file = File::open(path).await?;
+            let metadata = file.metadata().await?;
+            dir_size += metadata.size();
+            num_files += 1;
+        }
+    }
+    Ok((dir_size, num_files))
+}
+
+async fn send_fstree_serialized(send_stream: &mut SendStream, dir_path: &Path) -> Result<()> {
+    let os_dir_name = dir_path.file_name().expect("paths ending with . or .. are not supported yet");
+    let lossy_dir_name = os_dir_name.to_string_lossy();
+    let dir_name = ArrayString::<256>::from(&lossy_dir_name).map_err(|_| "directory name exceeds 256 bytes")?;
+    let mut header = FsTreeHeader {
+        dir_name,
+        entries: Vec::new(),
+    };
+
+    let mut children = Vec::new();
+
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        if is_dir {
+            header.entries.push(DirectoryEntry::Directory);
+        }
+        else {
+            header.entries.push(DirectoryEntry::File);
+        }
+
+        children.push((is_dir, path));
+    }
+
+    let header_message = postcard::to_allocvec(&header).unwrap();
+    send_stream.write_u32(header_message.len() as u32).await?;
+    send_stream.write_all(&header_message).await.anyerr()?;
+
+    for (is_dir, subtree) in children {
+        if is_dir {
+            Box::pin(send_fstree_serialized(send_stream, &subtree)).await?;
+        }
+        else {
+            send_file_wrapper(send_stream, &subtree).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn send_file_wrapper(send_stream: &mut SendStream, file_path: &Path) -> Result<()> {
+    let mut file = tokio::fs::File::open(file_path).await?;
+    let header = generate_file_header(&file, &file_path.file_name().unwrap().to_string_lossy()).await;
+    let header_message = postcard::to_allocvec(&header).anyerr()?;
+    debug_print_above!("prefix size: {}", header_message.len());
+    debug_print_above!("header: name: {}, size: {}", header.filename, header.size);
+    send_stream.write_u32(header_message.len() as u32).await?;
+    send_stream.write_all(&header_message).await.anyerr()?;
+    let expected_size = header.size;
+    send_file_chunks(send_stream, &mut file, expected_size).await
+}
+
+async fn send_file_chunks(send_stream: &mut SendStream, file: &mut File, expected_size: u64) -> Result<()> {
     let mut compressed_stream = ZstdEncoder::new(send_stream);
     let mut buf = [0u8; CHUNK_SIZE];
     let mut progress_bar = tqdm::pbar(Some(expected_size as usize));
@@ -41,24 +140,21 @@ pub async fn connect_and_send(endpoint: &Endpoint, target: &EndpointInfo, path: 
     let conn = endpoint.connect(target.clone(), PIGEON_ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
 
-    //send stream type 0
-    send.write_all(&[0]).await.anyerr()?;
+    //connection init information
+    send.write_u8(0u8).await.anyerr()?; // stream type 0
 
-    //prepare header message
-    let header = generate_header(path, sender_username).await;
-    let header_message = postcard::to_allocvec(&header).unwrap();
-
-    //send size of header
-    send.write_u64(header_message.len() as u64).await.anyerr()?;
-    send.flush().await.anyerr()?;
-
-    //send header
-    send.write_all(&header_message).await.anyerr()?;
-    send.flush().await.anyerr()?;
+    let expected_size = send_request_information(path, &mut send, sender_username).await?;
+    send.flush().await?; //since we have to wait for response anyways
 
     let response = recv.read_u8().await?;
     if response == 1 {
-        send_file_chunks(&mut send, path, header.size).await?;
+        if path.is_dir() {
+            send_fstree_serialized(&mut send, path).await?;
+        }
+        else {
+            let mut file = File::open(path).await?; //lack of abstraction maybe
+            send_file_chunks(&mut send, &mut file, expected_size).await?;
+        }
 
         let ack = recv.read_u8().await?;
         if ack == 2 {
