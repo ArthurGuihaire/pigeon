@@ -20,7 +20,7 @@ async fn generate_file_header(file: &File, filename: &str) -> FileHeader {
 }
 
 //info packet is name and size
-async fn send_request_information(path: &Path, send_stream: &mut SendStream, sender_username: &ArrayString<32>) -> Result<u64> {
+async fn send_request_information(path: &Path, send_stream: &mut ZstdEncoder<SendStream>, sender_username: &ArrayString<32>) -> Result<u64> {
     let name_message = sender_username.as_bytes();
     send_stream.write_u8(name_message.len() as u8).await?;
     send_stream.write_all(name_message).await.anyerr()?; // send username string
@@ -67,7 +67,7 @@ async fn get_fstree_size(dir_path: &Path) -> Result<(u64, u32)> {
     Ok((dir_size, num_files))
 }
 
-async fn send_fstree_serialized(send_stream: &mut SendStream, dir_path: &Path) -> Result<()> {
+async fn send_fstree_serialized(send_stream: &mut ZstdEncoder<SendStream>, dir_path: &Path) -> Result<()> {
     let os_dir_name = dir_path.file_name().expect("paths ending with . or .. are not supported yet");
     let lossy_dir_name = os_dir_name.to_string_lossy();
     let dir_name = ArrayString::<256>::from(&lossy_dir_name).map_err(|_| "directory name exceeds 256 bytes")?;
@@ -108,7 +108,7 @@ async fn send_fstree_serialized(send_stream: &mut SendStream, dir_path: &Path) -
     Ok(())
 }
 
-async fn send_file_wrapper(send_stream: &mut SendStream, file_path: &Path) -> Result<()> {
+async fn send_file_wrapper(send_stream: &mut ZstdEncoder<SendStream>, file_path: &Path) -> Result<()> {
     let mut file = tokio::fs::File::open(file_path).await?;
     let header = generate_file_header(&file, &file_path.file_name().unwrap().to_string_lossy()).await;
     let header_message = postcard::to_allocvec(&header).anyerr()?;
@@ -120,19 +120,17 @@ async fn send_file_wrapper(send_stream: &mut SendStream, file_path: &Path) -> Re
     send_file_chunks(send_stream, &mut file, expected_size).await
 }
 
-async fn send_file_chunks(send_stream: &mut SendStream, file: &mut File, expected_size: u64) -> Result<()> {
-    let mut compressed_stream = ZstdEncoder::new(send_stream);
+async fn send_file_chunks(send_stream: &mut ZstdEncoder<SendStream>, file: &mut File, expected_size: u64) -> Result<()> {
     let mut buf = [0u8; CHUNK_SIZE];
     let mut progress_bar = tqdm::pbar(Some(expected_size as usize));
     loop {
         let amt_read = file.read(&mut buf).await?;
         if amt_read == 0 { break; }
-        compressed_stream.write_all(&buf[..amt_read]).await?;
+        send_stream.write_all(&buf[..amt_read]).await?;
         let _ = progress_bar.update(amt_read).map_err(|e| eprintln!("progress bar error: {e}"));
     }
     progress_bar.clear(false);
-    compressed_stream.flush().await?;
-    compressed_stream.shutdown().await.map_err(|e| { eprintln!("compressed stream returned error: {e}"); e } )?;
+    send_stream.flush().await?;
     Ok(())
 }
 
@@ -143,18 +141,22 @@ pub async fn connect_and_send(endpoint: &Endpoint, target: &EndpointInfo, path: 
     //connection init information
     send.write_u8(0u8).await.anyerr()?; // stream type 0
 
-    let expected_size = send_request_information(path, &mut send, sender_username).await?;
-    send.flush().await?; //since we have to wait for response anyways
+    let mut send_compressed = ZstdEncoder::new(send);
+
+    let expected_size = send_request_information(path, &mut send_compressed, sender_username).await?;
+    send_compressed.flush().await?; //since we have to wait for response anyways
 
     let response = recv.read_u8().await?;
     if response == 1 {
         if path.is_dir() {
-            send_fstree_serialized(&mut send, path).await?;
+            send_fstree_serialized(&mut send_compressed, path).await?;
         }
         else {
             let mut file = File::open(path).await?; //lack of abstraction maybe
-            send_file_chunks(&mut send, &mut file, expected_size).await?;
+            send_file_chunks(&mut send_compressed, &mut file, expected_size).await?;
         }
+
+        send_compressed.shutdown().await?;
 
         let ack = recv.read_u8().await?;
         if ack == 2 {

@@ -25,7 +25,7 @@ async fn confirm_write(filename: &str, num_files: u32, total_size_bytes: u64, se
     trimmed.starts_with('y') || trimmed.starts_with('Y')
 }
 
-async fn recv_fstree_serialized(recv_stream: &mut RecvStream, current_dir_path: &Path) -> Result<()> {
+async fn recv_fstree_serialized(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, current_dir_path: &Path) -> Result<()> {
     let header_size = recv_stream.read_u32().await? as usize;
     let mut buf = vec![0u8; header_size];
     recv_stream.read_exact(&mut buf).await.anyerr()?;
@@ -49,7 +49,7 @@ async fn recv_fstree_serialized(recv_stream: &mut RecvStream, current_dir_path: 
     Ok(())
 }
 
-async fn recv_file_wrapper(recv_stream: &mut RecvStream, current_dir_path: &Path) -> Result<()> {
+async fn recv_file_wrapper(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, current_dir_path: &Path) -> Result<()> {
     let header_size = recv_stream.read_u32().await.anyerr()? as usize;
     debug_print_above!("prefix size: {}", header_size);
     let mut buf = vec![0u8; header_size];
@@ -60,17 +60,25 @@ async fn recv_file_wrapper(recv_stream: &mut RecvStream, current_dir_path: &Path
     recv_file_chunks(recv_stream, &current_dir_path.join(header.filename), header.size).await
 }
 
-async fn recv_file_chunks(recv_stream: &mut RecvStream, file_path: &Path, expected_size: u64) -> Result<()> {
+async fn recv_file_chunks(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, file_path: &Path, expected_size: u64) -> Result<()> {
     let mut file = File::create(file_path).await.expect("Failed to create file");
 
-    let mut decompressed_recv_stream = ZstdDecoder::new(BufReader::new(recv_stream));
     let mut buf = [0u8; CHUNK_SIZE];
     let mut progress_bar = tqdm::pbar(Some(expected_size as usize));
     let mut total_transferred: usize = 0;
     let bytes_copied = loop {
-        let amt_read = decompressed_recv_stream.read(&mut buf).await.anyerr()?;
-        if amt_read == 0 { break total_transferred }
-        file.write_all(&buf[..amt_read]).await?;
+        let remaining = expected_size as usize - total_transferred;
+        if remaining == 0 { break total_transferred }
+        let amt_read = if remaining < CHUNK_SIZE {
+            recv_stream.read_exact(&mut buf[..remaining]).await?;
+            file.write_all(&buf[..remaining]).await?;
+            remaining
+        }
+        else {
+            recv_stream.read_exact(&mut buf).await?;
+            file.write_all(&buf).await?;
+            CHUNK_SIZE
+        };
         total_transferred += amt_read;
         let _ = progress_bar.update(amt_read).map_err(|e| eprintln!("progress bar error: {e}"));
     } as u64;
@@ -111,7 +119,7 @@ pub async fn listen(endpoint: Endpoint) -> Result<()> {
         let stream_type = recv.read_u8().await?;
         debug_print_above!("accepted connection with stream type {stream_type}");
         match stream_type {
-            0 => return receive_file_connection(&mut send, &mut recv, &conn).await,
+            0 => return receive_file_connection(&mut send, recv, &conn).await,
             1 => {
                 exchange_usernames(&mut send, &mut recv, get_endpoint_info(&conn, &endpoint).await?).await?;
                 safe_wait_connection_closed(&conn).await;
@@ -121,29 +129,30 @@ pub async fn listen(endpoint: Endpoint) -> Result<()> {
 
     }
 }
-pub async fn receive_file_connection(send: &mut SendStream, recv: &mut RecvStream, conn: &Connection) -> Result<()> {
-    let username_size = recv.read_u8().await?;
+pub async fn receive_file_connection(send: &mut SendStream, recv: RecvStream, conn: &Connection) -> Result<()> {
+    let mut recv_decompressed = ZstdDecoder::new(BufReader::new(recv));
+    let username_size = recv_decompressed.read_u8().await?;
     let mut buf = vec![0u8; username_size as usize];
-    recv.read_exact(&mut buf).await.anyerr()?;
+    recv_decompressed.read_exact(&mut buf).await.anyerr()?;
     let sender_name = ArrayString::<32>::from_str(str::from_utf8(&buf).anyerr()?).anyerr()?;
 
-    let filename_size = recv.read_u32().await?;
+    let filename_size = recv_decompressed.read_u32().await?;
     let mut buf = vec![0u8; filename_size as usize];
-    recv.read_exact(&mut buf).await.anyerr()?;
+    recv_decompressed.read_exact(&mut buf).await.anyerr()?;
     let filename = String::from_utf8(buf).anyerr()?;
 
-    let total_size_bytes = recv.read_u64().await?;
-    let num_files = recv.read_u32().await?;
+    let total_size_bytes = recv_decompressed.read_u64().await?;
+    let num_files = recv_decompressed.read_u32().await?;
 
     if confirm_write(&filename, num_files, total_size_bytes, &sender_name).await {
         send.write_all(&[1]).await.expect("failed to send confirmation");
         send.flush().await?;
 
         if num_files == 1 {
-            recv_file_chunks(recv, &PathBuf::from_str(&filename).anyerr()?, total_size_bytes).await?;
+            recv_file_chunks(&mut recv_decompressed, &PathBuf::from_str(&filename).anyerr()?, total_size_bytes).await?;
         }
         else {
-            recv_fstree_serialized(recv, Path::new(".")).await?;
+            recv_fstree_serialized(&mut recv_decompressed, Path::new(".")).await?;
         }
         send.write_all(&[2]).await.expect("failed to send ACK");
         println!("Finished receiving file");
