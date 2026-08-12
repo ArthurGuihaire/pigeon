@@ -1,4 +1,4 @@
-use std::{os::unix::fs::MetadataExt, path::Path};
+use std::{os::unix::fs::MetadataExt, path::{Path, PathBuf}};
 
 use arrayvec::ArrayString;
 use async_compression::tokio::write::ZstdEncoder;
@@ -67,7 +67,7 @@ async fn get_fstree_size(dir_path: &Path) -> Result<(u64, u32)> {
     Ok((dir_size, num_files))
 }
 
-async fn send_fstree_serialized(send_stream: &mut ZstdEncoder<SendStream>, dir_path: &Path) -> Result<()> {
+async fn send_fstree_recursive(send_stream: &mut ZstdEncoder<SendStream>, dir_path: &Path) -> Result<()> {
     let os_dir_name = dir_path.file_name().expect("paths ending with . or .. are not supported yet");
     let lossy_dir_name = os_dir_name.to_string_lossy();
     let dir_name = ArrayString::<256>::from(&lossy_dir_name).map_err(|_| "directory name exceeds 256 bytes")?;
@@ -108,9 +108,52 @@ async fn send_fstree_serialized(send_stream: &mut ZstdEncoder<SendStream>, dir_p
     Ok(())
 }
 
+enum SerializeFsTask {
+    Directory(PathBuf),
+    File(PathBuf)
+}
+
+async fn send_fstree_serialized(send_stream: &mut ZstdEncoder<SendStream>, root_dir_path: &Path) -> Result<()> {
+    let mut tasks = vec![SerializeFsTask::Directory(root_dir_path.to_path_buf())];
+
+    while let Some(fstask) = tasks.pop() {
+        match fstask {
+            SerializeFsTask::Directory(dir_path) => {
+                let os_dir_name = dir_path.file_name().expect("paths ending in . or .. are not supported yet");
+                let lossy_dir_name = os_dir_name.to_string_lossy();
+                let dir_name = ArrayString::<256>::from(&lossy_dir_name).map_err(|_| "directory name exceeds 256 bytes")?;
+                let mut header = FsTreeHeader {
+                    dir_name,
+                    entries: Vec::new(),
+                };
+                for entry in std::fs::read_dir(dir_path)? {
+                    let path = entry?.path();
+                    if path.is_dir() {
+                        header.entries.push(DirectoryEntry::Directory);
+                        tasks.push(SerializeFsTask::Directory(path));
+                    }
+                    else {
+                        header.entries.push(DirectoryEntry::File);
+                        tasks.push(SerializeFsTask::File(path));
+                    }
+                }
+
+                let header_message = postcard::to_allocvec(&header).unwrap();
+                send_stream.write_u32(header_message.len() as u32).await?;
+                send_stream.write_all(&header_message).await.anyerr()?;
+            }
+            SerializeFsTask::File(file_path) => {
+                send_file_wrapper(send_stream, &file_path).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn send_file_wrapper(send_stream: &mut ZstdEncoder<SendStream>, file_path: &Path) -> Result<()> {
     let mut file = tokio::fs::File::open(file_path).await?;
-    let header = generate_file_header(&file, &file_path.file_name().unwrap().to_string_lossy()).await;
+    let header = generate_file_header(&file, &file_path.file_name().expect("paths ending in . or .. are not supported yet").to_string_lossy()).await;
     let header_message = postcard::to_allocvec(&header).anyerr()?;
     debug_print_above!("prefix size: {}", header_message.len());
     debug_print_above!("header: name: {}, size: {}", header.filename, header.size);

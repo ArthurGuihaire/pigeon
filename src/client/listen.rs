@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, str::FromStr};
+use std::{path::{Path, PathBuf}, rc::Rc, str::FromStr, sync::Arc};
 use arrayvec::ArrayString;
 use async_compression::tokio::bufread::ZstdDecoder;
 use iroh::{Endpoint, endpoint::{Connection, RecvStream, SendStream}};
@@ -25,7 +25,7 @@ async fn confirm_write(filename: &str, num_files: u32, total_size_bytes: u64, se
     trimmed.starts_with('y') || trimmed.starts_with('Y')
 }
 
-async fn recv_fstree_serialized(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, current_dir_path: &Path) -> Result<()> {
+async fn recv_fstree_recursive(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, current_dir_path: &Path) -> Result<()> {
     let header_size = recv_stream.read_u32().await? as usize;
     let mut buf = vec![0u8; header_size];
     recv_stream.read_exact(&mut buf).await.anyerr()?;
@@ -42,6 +42,45 @@ async fn recv_fstree_serialized(recv_stream: &mut ZstdDecoder<BufReader<RecvStre
             }
             DirectoryEntry::File => {
                 recv_file_wrapper(recv_stream, &new_dir_path).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+enum DeserializeFsTask {
+    Directory(Arc<PathBuf>),
+    File(Arc<PathBuf>),
+}
+
+async fn recv_fstree_serialized(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, base_dir: &Path) -> Result<()> {
+    let mut tasks = vec![DeserializeFsTask::Directory(Arc::new(base_dir.to_path_buf()))];
+    while let Some(fstask) = tasks.pop() {
+        match fstask {
+            DeserializeFsTask::Directory(parent_path) => {
+                let header_size = recv_stream.read_u32().await? as usize;
+                let mut buf = vec![0u8; header_size];
+                recv_stream.read_exact(&mut buf).await.anyerr()?;
+
+                let header: FsTreeHeader = postcard::from_bytes(&buf).anyerr()?;
+                let dir_name = header.dir_name;
+                let new_dir_path = Arc::new(parent_path.join(Path::new(dir_name.as_str())));
+                std::fs::create_dir(new_dir_path.as_path())?;
+
+                for subtree in header.entries {
+                    match subtree {
+                        DirectoryEntry::Directory => {
+                            tasks.push(DeserializeFsTask::Directory(Arc::clone(&new_dir_path)));
+                        }
+                        DirectoryEntry::File => {
+                            tasks.push(DeserializeFsTask::File(Arc::clone(&new_dir_path)));
+                        }
+                    }
+                }
+            }
+            DeserializeFsTask::File(parent_path) => {
+                recv_file_wrapper(recv_stream, &parent_path).await?;
             }
         }
     }

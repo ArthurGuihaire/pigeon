@@ -34,4 +34,4 @@ lto = true
 strip = true
 
 [profile.dev]
-strip = true
+strip = false
