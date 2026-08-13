@@ -1,4 +1,4 @@
-use std::{os::unix::fs::MetadataExt, path::{Path, PathBuf}};
+use std::{path::{Path, PathBuf}};
 
 use arrayvec::ArrayString;
 use async_compression::tokio::write::ZstdEncoder;
@@ -40,7 +40,7 @@ async fn send_request_information(path: &Path, send_stream: &mut ZstdEncoder<Sen
         Ok(total_size_bytes)
     }
     else {
-        let total_size_bytes = File::open(path).await?.metadata().await?.size();
+        let total_size_bytes = File::open(path).await?.metadata().await?.len();
         send_stream.write_u64(total_size_bytes).await?;
         send_stream.write_u32(1u32).await?; // 1 file
         Ok(total_size_bytes)
@@ -60,7 +60,7 @@ async fn get_fstree_size(dir_path: &Path) -> Result<(u64, u32)> {
         else {
             let file = File::open(path).await?;
             let metadata = file.metadata().await?;
-            dir_size += metadata.size();
+            dir_size += metadata.len();
             num_files += 1;
         }
     }

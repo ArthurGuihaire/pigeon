@@ -232,7 +232,7 @@ pub async fn get_public_key(
             Ok(res) => {
                 let status = res.status();
                 if let Err(reqwest_err) = res.error_for_status_ref() {
-                    let _error_text = res.text().await?;
+                    let error_text = res.text().await?;
                     debug_print_above!("error response: {}: {}", status, error_text);
 
                     return Err(reqwest_err);
@@ -267,7 +267,7 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
             Ok(res) => {
                 let status = res.status();
                 if let Err(reqwest_err) = res.error_for_status_ref() {
-                    let _error_text = res.text().await?;
+                    let error_text = res.text().await?;
                     debug_print_above!("error response: {}: {}", status, error_text);
 
                     return Err(reqwest_err);

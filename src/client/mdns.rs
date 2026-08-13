@@ -51,7 +51,7 @@ async fn subscribe_mdns_events(mdns: &MdnsAddressLookup, endpoint: &Endpoint) ->
                 exchange_usernames(&mut send, &mut recv, endpoint_info).await?;
                 conn.close(VarInt::from_u32(0u32), b"");
             }
-            DiscoveryEvent::Expired { endpoint_id: _ } => {
+            DiscoveryEvent::Expired { endpoint_id } => {
                 debug_print_above!("mdns expired: {endpoint_id}");
             }
             _ => { debug_print_above!("something weird happened"); }
