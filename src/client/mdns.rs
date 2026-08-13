@@ -54,7 +54,7 @@ async fn subscribe_mdns_events(mdns: &MdnsAddressLookup, endpoint: &Endpoint) ->
             DiscoveryEvent::Expired { endpoint_id } => {
                 debug_print_above!("mdns expired: {endpoint_id}");
             }
-            _ => { debug_print_above!("something weird happened") }
+            _ => { debug_print_above!("something weird happened"); }
         }
     }
     Ok(())
