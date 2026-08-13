@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, rc::Rc, str::FromStr, sync::Arc};
+use std::{path::{Path, PathBuf}, str::FromStr, sync::Arc};
 use arrayvec::ArrayString;
 use async_compression::tokio::bufread::ZstdDecoder;
 use iroh::{Endpoint, endpoint::{Connection, RecvStream, SendStream}};
@@ -25,6 +25,8 @@ async fn confirm_write(filename: &str, num_files: u32, total_size_bytes: u64, se
     trimmed.starts_with('y') || trimmed.starts_with('Y')
 }
 
+#[deprecated(note = "Replaced by `recv_fstree_serialized`")]
+#[allow(dead_code)]
 async fn recv_fstree_recursive(recv_stream: &mut ZstdDecoder<BufReader<RecvStream>>, current_dir_path: &Path) -> Result<()> {
     let header_size = recv_stream.read_u32().await? as usize;
     let mut buf = vec![0u8; header_size];

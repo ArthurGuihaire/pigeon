@@ -67,6 +67,8 @@ async fn get_fstree_size(dir_path: &Path) -> Result<(u64, u32)> {
     Ok((dir_size, num_files))
 }
 
+#[deprecated(note = "Replaced by `send_fstree_serialized`")]
+#[allow(dead_code)]
 async fn send_fstree_recursive(send_stream: &mut ZstdEncoder<SendStream>, dir_path: &Path) -> Result<()> {
     let os_dir_name = dir_path.file_name().expect("paths ending with . or .. are not supported yet");
     let lossy_dir_name = os_dir_name.to_string_lossy();
