@@ -1,12 +1,13 @@
 # Pigeon
 > File sharing app that aims to be similar to localsend, but cross-network
 
-## Installation
-- On Windows, macOS, and Linux: install rust toolchain, run `cargo build --release`, and place the executable target/release/pigeon(.exe) in the desired location
-- prebuild binaries / cargo-dist scripts coming soon
+## Available installation methods
+- Go to the releases tab and download the binary for your operating system, or use the installation script (shell script for Linux, powershell script for Windows, homebrew tap for macOS)
 - Arch Linux: AUR package coming soonish (before August 15th hopefully)
 - crates.io: might be published by August 15th as well
 - Android support: maybe one day, ios probably never cause pain
+
+> You can also build from source by installing the rust toolchain if you don't have it already, cloning the repo, and running cargo build --release from the project root
 
 ## Usage
 Listen/receive files: `pigeon`
