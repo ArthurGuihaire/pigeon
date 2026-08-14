@@ -8,7 +8,8 @@ repository = "https://github.com/ArthurGuihaire/pigeon"
 arrayvec = { version = "0.7", features = ["serde"] }
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 axum = "0.8"
-clap = { version = "4.6.6", features = ["derive"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+clap = { version = "4.6", features = ["derive"] }
 directories = "6.0"
 hex = "0.4"
 iroh = "1.0"
@@ -17,7 +18,8 @@ n0-error = "1.0"
 n0-future = "0.3"
 postcard = { version = "1.1", features = ["alloc"] }
 rand = "0.10"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "rustls"] }
+rustls = "0.23"
 serde = "1.0"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
 tqdm = "0.8"
@@ -31,7 +33,7 @@ name = "server"
 path = "src/server/server.rs"
 
 [profile.release]
-lto = true
+lto = "thin"
 strip = true
 
 [profile.dev]

@@ -6,7 +6,7 @@ use n0_error::{AnyError, Result, StdResultExt};
 use n0_future::StreamExt;
 use pigeon::common::{PIGEON_ALPN, MDNS_USERNAME};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::RwLock};
-use crate::debug_print_above;
+use crate::{debug_print_above, utils::safe_print};
 
 pub static MDNS_USERS: OnceLock<RwLock<HashMap<ArrayString<32>, EndpointInfo>>> = OnceLock::new();
 
@@ -18,7 +18,7 @@ pub async fn exchange_usernames(send: &mut SendStream, recv: &mut RecvStream, ta
 
         let name = ArrayString::from_str(str::from_utf8(&buf[..size]).anyerr()?).anyerr()?;
         let result = MDNS_USERS.get().unwrap().write().await.insert(name, target);
-        if result.is_none() { debug_print_above!("Mdns found user with name {name}"); }
+        if result.is_none() { safe_print(&format!("Discovered a device on the local network with name {name}")); }
 
         Ok::<(), AnyError>(())
     };
@@ -52,7 +52,7 @@ async fn subscribe_mdns_events(mdns: &MdnsAddressLookup, endpoint: &Endpoint) ->
                 conn.close(VarInt::from_u32(0u32), b"");
             }
             DiscoveryEvent::Expired { endpoint_id } => {
-                debug_print_above!("mdns expired: {endpoint_id}");
+                safe_print(&format!("Device {endpoint_id} is no longer available on the local network"));
             }
             _ => { debug_print_above!("something weird happened"); }
         }

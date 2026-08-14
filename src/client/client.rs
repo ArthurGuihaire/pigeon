@@ -13,7 +13,7 @@ use pigeon::common::{SECRET_KEY, MDNS_USERNAME, ONLINE_USERNAME, load_or_create_
 use listen::listen;
 use pigeon::constants::{self, AUTH_URL, SERVER_PUBLIC_KEY};
 
-use crate::utils::{get_public_key, register_http, verify_server_identity, create_endpoint, change_name_interactive, create_name_and_register, try_load_name};
+use crate::utils::{change_name_interactive, create_endpoint, create_name_and_register, get_public_key, register_http, safe_print, try_load_name, verify_server_identity};
 use crate::mdns::exchange_info_mdns;
 use crate::utils::{DiscoveryType, get_endpoint_info_interactive};
 use crate::connect::connect_and_send;
@@ -45,13 +45,13 @@ async fn online_thread() -> Result<()> {
             if server_key == key.public() {
                 ONLINE_USERNAME.set(current_username.clone()).unwrap();
             } else {
-                println!("Server and local public keys do not match, create a new identity");
+                safe_print("Server and local public keys do not match, creating a new identity");
                 ONLINE_USERNAME.set(create_name_and_register(&constants::DATA_DIR, &key.public(), true).await.anyerr()?).unwrap();
             }
         }
     }
 
-    debug_print_above!("online thread finished");
+    safe_print("Successfully connected to server, cross-network transfers are available");
 
     Ok(())
 }

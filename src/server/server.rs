@@ -4,6 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::routing::post;
+use axum_server::tls_rustls::RustlsConfig;
 use iroh::PublicKey;
 use iroh::SecretKey;
 use iroh::Signature;
@@ -15,6 +16,7 @@ use rand::Rng;
 use std::path::Path;
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use tokio::sync::Mutex;
 
 use pigeon::RegisterRequest;
@@ -25,6 +27,7 @@ struct SharedState {
     clients: Arc<Mutex<HashMap<ArrayString<32>, (PublicKey, Option<[u8; 32]>)>>>,
     private_key: SecretKey,
 }
+//let config = RustlsConfig::from_pem_file("cert.pem", "key.pem").await.expect("failed to load tls keys");
 
 #[tokio::main]
 async fn main() {
@@ -42,8 +45,17 @@ async fn main() {
         .route("/change_name", post(change_name))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    rustls::crypto::ring::default_provider().install_default().expect("failed to set default rustls crypto provider");
+    let config = RustlsConfig::from_pem_file("cert.pem", "key.pem")
+        .await
+        .expect("Failed to load cert.pem or key.pem");
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
+
+    axum_server::bind_rustls(addr, config)
+        .serve(app.into_make_service())
+        .await.unwrap();
+    // let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
+    // axum::serve(listener, app).await.unwrap();
 }
 
 async fn handle_registration(

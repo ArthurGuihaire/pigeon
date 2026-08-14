@@ -8,7 +8,7 @@ use pigeon::{AuthRequest, ChangeNameRequest, GetKeyRequest, RegisterRequest};
 use pigeon::common::{ONLINE_USERNAME, SECRET_KEY, bind_endpoint};
 use pigeon::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTER_URL, START_AUTH_URL};
 use rand::Rng;
-use reqwest::StatusCode;
+use reqwest::{Certificate, Client, StatusCode};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, atomic};
@@ -163,13 +163,18 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey,
     return Ok(name_arraystring);
 }
 
+fn build_client() -> Result<Client> {
+    let cert_bytes = std::fs::read("cert.pem")?;
+    let ca_cert = Certificate::from_pem(&cert_bytes).anyerr()?;
+    reqwest::Client::builder().tls_certs_merge([ca_cert]).build().anyerr()
+}
 
 pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> Result<()> {
     let old_name = ONLINE_USERNAME.get().expect("Cannot change online username unless you are connected to the internet").clone();
     let auth_request = AuthRequest {
         name: old_name,
     };
-    let client = reqwest::Client::new();
+    let client = build_client()?;
     let response = client.post(&*START_AUTH_URL).json(&auth_request).send().await.anyerr()?;
     //for some reason getting .text moves the response??? so get status beforehand
     let status = response.status();
@@ -220,7 +225,7 @@ pub async fn change_name_interactive(secret_key: &SecretKey) -> Result<()> {
 pub async fn get_public_key(
     target: &ArrayString<32>,
 ) -> Result<PublicKey, reqwest::Error> {
-    let client = reqwest::Client::new();
+    let client = build_client().expect("failed to create http client");
 
     let request = GetKeyRequest { target: *target };
 
@@ -253,7 +258,7 @@ pub async fn get_public_key(
 }
 
 pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Result<(), reqwest::Error> {
-    let client = reqwest::Client::new();
+    let client = build_client().expect("failed to build http client");
 
     let request = RegisterRequest {
         name: *name,
@@ -289,7 +294,7 @@ pub async fn verify_server_identity(auth_url: &str, expected_public_key: &Public
     let mut random_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut random_bytes);
     let random_hex = hex::encode(&random_bytes);
-    let client = reqwest::Client::new();
+    let client = build_client()?;
     let response: String = client.post(auth_url).json(&random_hex).send().await.anyerr()?.json().await.anyerr()?;
     let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
