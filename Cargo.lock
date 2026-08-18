@@ -2600,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "pigeon"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "arrayvec",
  "async-compression",

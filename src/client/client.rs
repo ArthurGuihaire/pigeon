@@ -36,7 +36,8 @@ async fn online_thread() -> Result<()> {
     match result {
         Err(_) => {
             debug_print_above!("Failed to get public key or not registered yet, trying to register");
-            register_http(&current_username, &key.public()).await.anyerr().inspect_err(|e| eprintln!("Failed to register: {e}"))?;
+            register_http(&current_username, &key.public()).await.anyerr().inspect_err(|e| safe_print(&format!("Failed to register: {e}")))?;
+            ONLINE_USERNAME.set(current_username.clone()).unwrap();
         }
         Ok(server_key) => {
             println!("got server key");

@@ -147,7 +147,7 @@ pub async fn listen(endpoint: Endpoint) -> Result<()> {
                     match incoming.accept() {
                         Ok(accepting) => break accepting.await?,
                         Err(err) => {
-                            eprintln!("incoming connection failed: {err:#}");
+                            eprintln!("incoming connection failed: {err:#}"); // this happens randomly, ignore it
                             continue;
                         }
                     };
@@ -180,12 +180,14 @@ pub async fn receive_file_connection(send: &mut SendStream, recv: RecvStream, co
     let filename_size = recv_decompressed.read_u32().await?;
     let mut buf = vec![0u8; filename_size as usize];
     recv_decompressed.read_exact(&mut buf).await.anyerr()?;
-    let filename = String::from_utf8(buf).anyerr()?;
+    let filename_unsanitized = String::from_utf8(buf).anyerr()?;
+    let filename_path = Path::new(&filename_unsanitized).file_name().expect("Received path ends in . or .. which is not supported, exiting");
+    let filename = filename_path.to_str().unwrap();
 
     let total_size_bytes = recv_decompressed.read_u64().await?;
     let num_files = recv_decompressed.read_u32().await?;
 
-    if confirm_write(&filename, num_files, total_size_bytes, &sender_name).await {
+    if confirm_write(filename, num_files, total_size_bytes, &sender_name).await {
         send.write_all(&[1]).await.expect("failed to send confirmation");
         send.flush().await?;
 

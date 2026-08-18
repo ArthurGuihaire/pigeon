@@ -253,9 +253,9 @@ pub async fn get_public_key(
             }
             Err(e) => {
                 // for network errors, wait a bit and try again
-                eprintln!("network error: {}", e);
+                safe_print(&format!("network error: {}", e));
                 if let Some(source) = std::error::Error::source(&e) {
-                    eprintln!("Caused by: {:?}", source);
+                    debug_print_above!("Caused by: {:?}", source);
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }

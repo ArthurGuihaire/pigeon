@@ -86,9 +86,11 @@ async fn start_auth(
         None => return (StatusCode::BAD_REQUEST, String::from("cannot change a name that is not registered")),
         Some(val) => val,
     };
-    entry.1 = Some([0u8; 32]);
-    rand::rng().fill_bytes(&mut entry.1.unwrap());
-    let challenge = hex::encode(&entry.1.unwrap());
+    let mut challenge_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut challenge_bytes);
+    entry.1 = Some(challenge_bytes);
+    let challenge = hex::encode(&challenge_bytes);
+    println!("{}", challenge);
 
     (StatusCode::OK, challenge)
 }

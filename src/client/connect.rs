@@ -3,13 +3,13 @@ use std::{path::{Path, PathBuf}};
 use arrayvec::ArrayString;
 use async_compression::tokio::write::ZstdEncoder;
 use iroh::{Endpoint, endpoint::{SendStream, VarInt}, endpoint_info::EndpointInfo};
-use n0_error::{Result, StdResultExt};
+use n0_error::{Result, StdResultExt, anyerr};
 use pigeon::{DirectoryEntry, FileHeader, FsTreeHeader, constants::CHUNK_SIZE};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, fs::File};
 
 use pigeon::common::PIGEON_ALPN;
 
-use crate::debug_print_above;
+use crate::{debug_print_above, utils::safe_print};
 
 async fn generate_file_header(file: &File, filename: &str) -> FileHeader {
     let length = file.metadata().await.expect("Failed to get file metadata").len();
@@ -180,7 +180,18 @@ async fn send_file_chunks(send_stream: &mut ZstdEncoder<SendStream>, file: &mut 
 }
 
 pub async fn connect_and_send(endpoint: &Endpoint, target: &EndpointInfo, path: &Path, sender_username: &ArrayString<32>) -> Result<()> {
-    let conn = endpoint.connect(target.clone(), PIGEON_ALPN).await?;
+    let mut attempts = 0;
+    let conn = loop {
+        let conn_result = endpoint.connect(target.clone(), PIGEON_ALPN).await;
+        if let Ok(conn) = conn_result { break conn }
+        if attempts < 5 {
+            attempts += 1;
+            safe_print(&format!("Connection failed, retrying {} more times", 5-attempts));
+        }
+        else {
+            return Err(anyerr!("Connection failed 5 times, exiting"));
+        }
+    };
     let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
 
     //connection init information
