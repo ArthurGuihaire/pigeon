@@ -40,6 +40,11 @@ permissions:
 # will be marked as a prerelease.
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.4)'
+        required: true
+        type: string
   pull_request:
   push:
     tags:
