@@ -56,9 +56,10 @@ async fn main() {
 
 async fn handle_registration(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    axum::extract::Json(payload): axum::extract::Json<RegisterRequest>,
+    body: axum::body::Bytes,
 ) -> Result<StatusCode, (StatusCode, &'static str)>
 {
+    let payload: RegisterRequest = postcard::from_bytes(&body).map_err(|_| (StatusCode::BAD_REQUEST, "invalid postcard binary payload"))?;
     let mut db = state.clients.lock().await;
     if db.contains_key(&payload.name) {
         Err((StatusCode::BAD_REQUEST, "that name is already registered"))
@@ -71,9 +72,10 @@ async fn handle_registration(
 
 async fn handle_key_request(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    axum::extract::Json(payload): axum::extract::Json<GetKeyRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Json<PublicKey>, (StatusCode, String)>
 {
+    let payload: GetKeyRequest = postcard::from_bytes(&body).map_err(|_| (StatusCode::BAD_REQUEST, String::from("invalid postcard binary payload")))?;
     let db = state.clients.lock().await;
     match db.get(&payload.target) {
         None => Err((StatusCode::BAD_REQUEST, format!("{} is not registered", &payload.target))),
@@ -83,8 +85,11 @@ async fn handle_key_request(
 
 async fn start_auth(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    axum::extract::Json(payload): axum::extract::Json<AuthRequest>) -> (StatusCode, String)
+    body: axum::body::Bytes) -> (StatusCode, String)
 {
+    let Ok(payload) = postcard::from_bytes::<AuthRequest>(&body) else {
+        return (StatusCode::BAD_REQUEST, String::from("invalid postcard binary payload"));
+    };
     let mut db = state.clients.lock().await;
     let result = db.get_mut(&payload.name);
     let entry = match result {
@@ -102,8 +107,11 @@ async fn start_auth(
 
 async fn change_name(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    axum::extract::Json(payload): axum::extract::Json<ChangeNameRequest>) -> StatusCode
+    body: axum::body::Bytes) -> StatusCode
 {
+    let Ok(payload) = postcard::from_bytes::<ChangeNameRequest>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
     let mut db = state.clients.lock().await;
     let result = db.get_mut(&payload.old_name);
     let entry = match result {
@@ -136,3 +144,8 @@ async fn change_name(
         }
     }
 }
+
+// async fn save_and_shutdown(
+//     axum::extract::State(state): axum::extract::State<SharedState>,
+//     axum::extract::Json(payload): axum::extract::Json<>
+// )

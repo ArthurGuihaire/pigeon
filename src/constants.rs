@@ -37,3 +37,5 @@ pub const CHUNK_SIZE: usize = 64 * 1024;
 pub const USE_CUSTOM_HTTPS: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("USE_CUSTOM_HTTPS").map(|s| s.parse::<bool>().expect(&format!("USE_CUSTOM_HTTPS should only be true or false, not {}", s))).unwrap_or(false)
 });
+
+pub const ADMIN_KEYS: &[&str] = &["895bf370303e81cbb840494bbd0befa95e2c36114ffcb6b24504727e89990abd"];

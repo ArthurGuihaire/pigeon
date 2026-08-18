@@ -179,7 +179,8 @@ pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> 
         name: old_name,
     };
     let client = build_client()?;
-    let response = client.post(&*START_AUTH_URL).json(&auth_request).send().await.anyerr()?;
+    let payload = postcard::to_allocvec(&auth_request).anyerr()?;
+    let response = client.post(&*START_AUTH_URL).body(payload).send().await.anyerr()?;
     //for some reason getting .text moves the response??? so get status beforehand
     let status = response.status();
     let text = response.text().await.anyerr()?;
@@ -196,7 +197,8 @@ pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> 
         hex_signature: hex::encode(&signature.to_bytes()),
     };
 
-    let response = client.post(&*CHANGE_NAME_URL).json(&change_name_request).send().await.anyerr()?;
+    let payload = postcard::to_allocvec(&change_name_request).anyerr()?;
+    let response = client.post(&*CHANGE_NAME_URL).body(payload).send().await.anyerr()?;
     match response.status() {
         StatusCode::UNAUTHORIZED => return Err("Error: Unauthorized. must start auth first".into()),
         StatusCode::INTERNAL_SERVER_ERROR => return Err("Error: Internal server error".into()),
@@ -232,10 +234,11 @@ pub async fn get_public_key(
     let client = build_client().expect("failed to create http client");
 
     let request = GetKeyRequest { target: *target };
+    let payload = postcard::to_allocvec(&request).expect("failed to serialize request");
 
     loop {
         //send post
-        let response = client.get(&(*GETKEY_URL)).json(&request).send().await;
+        let response = client.get(&(*GETKEY_URL)).body(payload.clone()).send().await;
 
         match response {
             Ok(res) => {
@@ -271,9 +274,10 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
         name: *name,
         publickey: *publickey,
     };
+    let payload = postcard::to_allocvec(&request).expect("failed to serialize request");
 
     loop {
-        let response = client.post(&(*REGISTER_URL)).json(&request).send().await;
+        let response = client.post(&(*REGISTER_URL)).body(payload.clone()).send().await;
 
         match response {
             Ok(res) => {

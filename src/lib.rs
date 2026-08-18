@@ -44,3 +44,8 @@ pub struct ChangeNameRequest {
 pub struct AuthRequest {
     pub name: ArrayString<32>,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct SaveShutdownRequest {
+    pub hex_signature: String,
+}
