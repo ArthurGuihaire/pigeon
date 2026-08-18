@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use iroh::PublicKey;
 use n0_error::{Result, StdResultExt};
 use clap::Parser;
 
@@ -11,9 +10,9 @@ mod utils;
 
 use pigeon::common::{SECRET_KEY, MDNS_USERNAME, ONLINE_USERNAME, load_or_create_identity};
 use listen::listen;
-use pigeon::constants::{self, AUTH_URL, SERVER_PUBLIC_KEY};
+use pigeon::constants;
 
-use crate::utils::{change_name_interactive, create_endpoint, create_name_and_register, get_public_key, register_http, safe_print, try_load_name, verify_server_identity};
+use crate::utils::{change_name_interactive, create_endpoint, create_name_and_register, get_public_key, register_http, safe_print, try_load_name};
 use crate::mdns::exchange_info_mdns;
 use crate::utils::{DiscoveryType, get_endpoint_info_interactive};
 use crate::connect::connect_and_send;
@@ -29,19 +28,18 @@ struct Args {
 }
 
 async fn online_thread() -> Result<()> {
-    let server_authenticity = verify_server_identity(&AUTH_URL, &PublicKey::from_bytes(&hex::decode(SERVER_PUBLIC_KEY).anyerr()?.try_into().unwrap())?).await.inspect_err(|_| { let _ = USE_SERVER.set(false); } )?;
-    if !server_authenticity { let _ = USE_SERVER.set(false); return Err("Server authenticity cannot be established, using only mdns".into()); }
-
     USE_SERVER.set(true).expect("Can't set USE_SERVER for some reason");
-
     let current_username = MDNS_USERNAME.get().unwrap();
     let key = SECRET_KEY.get().unwrap();
     let result = get_public_key(&current_username).await;
+    println!("Got here 2");
     match result {
         Err(_) => {
-            register_http(&current_username, &key.public()).await.anyerr()?;
+            debug_print_above!("Failed to get public key or not registered yet, trying to register");
+            register_http(&current_username, &key.public()).await.anyerr().inspect_err(|e| eprintln!("Failed to register: {e}"))?;
         }
         Ok(server_key) => {
+            println!("got server key");
             if server_key == key.public() {
                 ONLINE_USERNAME.set(current_username.clone()).unwrap();
             } else {
@@ -85,7 +83,6 @@ async fn main() -> Result<()> {
     let listen_thread = tokio::spawn(listen(endpoint.clone()));
 
     if let Some(send_path) = args.send_file {
-        // let target_key = if is_online { get_public_key_interactive().await } else { get_public_key_mdns_interactive().await };
         let (target_info, discovery_type) = get_endpoint_info_interactive().await;
         let connect_name = match discovery_type {
             DiscoveryType::MDNS => MDNS_USERNAME.get().unwrap(),

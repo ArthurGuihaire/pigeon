@@ -18,6 +18,8 @@ username.txt
 ed25519_signing_key
 ed25519_key
 key.pem
+#(not actually secret but not needed for client, and self hosted servers should generate a new key pair)
+cert.pem
 
 # Dumb scripts
 count-lines.py

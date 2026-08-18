@@ -6,41 +6,32 @@ use axum::routing::get;
 use axum::routing::post;
 use axum_server::tls_rustls::RustlsConfig;
 use iroh::PublicKey;
-use iroh::SecretKey;
 use iroh::Signature;
 use pigeon::AuthRequest;
 use pigeon::ChangeNameRequest;
 use pigeon::GetKeyRequest;
-use pigeon::constants::SERVER_KEY_FILE;
 use rand::Rng;
-use std::path::Path;
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::sync::Mutex;
 
 use pigeon::RegisterRequest;
-use pigeon::common::load_or_create_identity;
 
 #[derive(Clone)]
 struct SharedState {
     clients: Arc<Mutex<HashMap<ArrayString<32>, (PublicKey, Option<[u8; 32]>)>>>,
-    private_key: SecretKey,
 }
 //let config = RustlsConfig::from_pem_file("cert.pem", "key.pem").await.expect("failed to load tls keys");
 
 #[tokio::main]
 async fn main() {
-    let key_path = Path::new(SERVER_KEY_FILE);
-    let private_key = load_or_create_identity(key_path).expect("failed to load or create key pair");
     let state = SharedState {
         clients: Arc::new(Mutex::new(HashMap::new())),
-        private_key,
     };
     let app: Router = Router::new()
         .route("/register", post(handle_registration))
         .route("/getkey", get(handle_key_request))
-        .route("/auth", post(handle_auth))
         .route("/start_auth", post(start_auth))
         .route("/change_name", post(change_name))
         .with_state(state);
@@ -83,16 +74,6 @@ async fn handle_key_request(
         None => Err((StatusCode::BAD_REQUEST, format!("{} is not registered", &payload.target))),
         Some(key) => Ok(Json(key.0)),
     }
-}
-
-async fn handle_auth(
-    axum::extract::State(state): axum::extract::State<SharedState>,
-    axum::extract::Json(payload): axum::extract::Json<String>) -> Json<String>
-{
-    let bytes = hex::decode(payload).expect("not hex");
-    let signature = state.private_key.sign(&bytes);
-
-    Json(hex::encode(signature.to_bytes()))
 }
 
 async fn start_auth(

@@ -1,4 +1,4 @@
-use iroh::{Endpoint, PublicKey, SecretKey, Signature};
+use iroh::{Endpoint, PublicKey, SecretKey};
 use arrayvec::{ArrayString, CapacityError};
 use iroh::endpoint::{Connection, ConnectionError};
 use iroh::endpoint_info::{EndpointData, EndpointInfo};
@@ -7,7 +7,6 @@ use n0_error::StdResultExt;
 use pigeon::{AuthRequest, ChangeNameRequest, GetKeyRequest, RegisterRequest};
 use pigeon::common::{ONLINE_USERNAME, SECRET_KEY, bind_endpoint};
 use pigeon::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTER_URL, START_AUTH_URL};
-use rand::Rng;
 use reqwest::{Certificate, Client, StatusCode};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -46,7 +45,7 @@ pub fn flush_print_queue() {
     queue.clear();
 }
 
-#[cfg(debug_assertions)]
+// #[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! debug_print_above {
     ($($arg:tt)*) => {
@@ -54,11 +53,11 @@ macro_rules! debug_print_above {
     };
 }
 
-#[cfg(not(debug_assertions))]
-#[macro_export]
-macro_rules! debug_print_above {
-    ($($arg:tt)*) => {};
-}
+// #[cfg(not(debug_assertions))]
+// #[macro_export]
+// macro_rules! debug_print_above {
+//     ($($arg:tt)*) => {};
+// }
 
 pub enum DiscoveryType {
     MDNS,
@@ -163,9 +162,13 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey,
     return Ok(name_arraystring);
 }
 
+const CERT_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/rootCA.pem"
+));
+
 fn build_client() -> Result<Client> {
-    let cert_bytes = std::fs::read("cert.pem")?;
-    let ca_cert = Certificate::from_pem(&cert_bytes).anyerr()?;
+    let ca_cert = Certificate::from_pem(&CERT_BYTES).anyerr()?;
     reqwest::Client::builder().tls_certs_merge([ca_cert]).build().anyerr()
 }
 
@@ -251,6 +254,9 @@ pub async fn get_public_key(
             Err(e) => {
                 // for network errors, wait a bit and try again
                 eprintln!("network error: {}", e);
+                if let Some(source) = std::error::Error::source(&e) {
+                    eprintln!("Caused by: {:?}", source);
+                }
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
@@ -288,15 +294,4 @@ pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Res
             }
         }
     }
-}
-
-pub async fn verify_server_identity(auth_url: &str, expected_public_key: &PublicKey) -> Result<bool> {
-    let mut random_bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut random_bytes);
-    let random_hex = hex::encode(&random_bytes);
-    let client = build_client()?;
-    let response: String = client.post(auth_url).json(&random_hex).send().await.anyerr()?.json().await.anyerr()?;
-    let signature_bytes = hex::decode(response).expect("response contains invalid hex data");
-    let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
-    Ok(expected_public_key.verify(&random_bytes, &signature).is_ok())
 }
