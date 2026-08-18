@@ -10,6 +10,7 @@ use iroh::Signature;
 use pigeon::AuthRequest;
 use pigeon::ChangeNameRequest;
 use pigeon::GetKeyRequest;
+use pigeon::constants;
 use rand::Rng;
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -36,17 +37,21 @@ async fn main() {
         .route("/change_name", post(change_name))
         .with_state(state);
 
-    rustls::crypto::ring::default_provider().install_default().expect("failed to set default rustls crypto provider");
-    let config = RustlsConfig::from_pem_file("cert.pem", "key.pem")
-        .await
-        .expect("Failed to load cert.pem or key.pem");
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
+    if *constants::USE_CUSTOM_HTTPS {
+        rustls::crypto::ring::default_provider().install_default().expect("failed to set default rustls crypto provider");
+        let config = RustlsConfig::from_pem_file("cert.pem", "key.pem")
+            .await
+            .expect("Failed to load cert.pem or key.pem");
+        let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
 
-    axum_server::bind_rustls(addr, config)
-        .serve(app.into_make_service())
-        .await.unwrap();
-    // let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
-    // axum::serve(listener, app).await.unwrap();
+        axum_server::bind_rustls(addr, config)
+            .serve(app.into_make_service())
+            .await.unwrap()
+    }
+    else {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    }
 }
 
 async fn handle_registration(

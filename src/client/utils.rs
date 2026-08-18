@@ -6,7 +6,7 @@ use n0_error::{anyerr, Result};
 use n0_error::StdResultExt;
 use pigeon::{AuthRequest, ChangeNameRequest, GetKeyRequest, RegisterRequest};
 use pigeon::common::{ONLINE_USERNAME, SECRET_KEY, bind_endpoint};
-use pigeon::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTER_URL, START_AUTH_URL};
+use pigeon::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTER_URL, START_AUTH_URL, USE_CUSTOM_HTTPS};
 use reqwest::{Certificate, Client, StatusCode};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -162,14 +162,15 @@ pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey,
     return Ok(name_arraystring);
 }
 
-const CERT_BYTES: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/rootCA.pem"
-));
-
 fn build_client() -> Result<Client> {
-    let ca_cert = Certificate::from_pem(&CERT_BYTES).anyerr()?;
-    reqwest::Client::builder().tls_certs_merge([ca_cert]).build().anyerr()
+    if *USE_CUSTOM_HTTPS {
+        let cert_bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/rootCA.pem")).expect("custom https requested but cannot read certificate file rootCA.pem");
+        let ca_cert = Certificate::from_pem(&cert_bytes).anyerr()?;
+        reqwest::Client::builder().tls_certs_merge([ca_cert]).build().anyerr()
+    }
+    else {
+        Ok(reqwest::Client::new())
+    }
 }
 
 pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> Result<()> {

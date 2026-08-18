@@ -32,7 +32,6 @@ async fn online_thread() -> Result<()> {
     let current_username = MDNS_USERNAME.get().unwrap();
     let key = SECRET_KEY.get().unwrap();
     let result = get_public_key(&current_username).await;
-    println!("Got here 2");
     match result {
         Err(_) => {
             debug_print_above!("Failed to get public key or not registered yet, trying to register");
@@ -40,7 +39,6 @@ async fn online_thread() -> Result<()> {
             ONLINE_USERNAME.set(current_username.clone()).unwrap();
         }
         Ok(server_key) => {
-            println!("got server key");
             if server_key == key.public() {
                 ONLINE_USERNAME.set(current_username.clone()).unwrap();
             } else {

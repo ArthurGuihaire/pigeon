@@ -33,3 +33,7 @@ pub const NAME_FILE: &str = "username.txt";
 pub const CLIENT_KEY_FILE: &str = "ed25519_key";
 
 pub const CHUNK_SIZE: usize = 64 * 1024;
+
+pub const USE_CUSTOM_HTTPS: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("USE_CUSTOM_HTTPS").map(|s| s.parse::<bool>().expect(&format!("USE_CUSTOM_HTTPS should only be true or false, not {}", s))).unwrap_or(false)
+});
