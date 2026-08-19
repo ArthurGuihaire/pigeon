@@ -21,7 +21,9 @@ Re-generating encryption keys is not natively supported, but you can manually de
 
 ## Uninstalling
 Linux: Delete pigeon and pigeon-update from `$CARGO_HOME/bin`. If `CARGO_HOME` isn't set, check `~/.cargo/bin`. To also delete app data, delete `~/.local/share/pigeon`.
+
 macOS: Delete pigeon and pigeon-update from `$CARGO_HOME/bin`. If `CARGO_HOME` isn't set, check `~/.cargo/bin`. To also delete app data, delete `/Library/Application Support/pigeon`
+
 Windows: Delete pigeon.exe and pigeon-update.exe from `%CARGO_HOME%\bin`. If `CARGO_HOME` isn't set, check `C:\Users\<user>\.cargo\bin\)` where <user> is your user. To also delete app data, delete `{FOLDERID_LocalAppData}\pigeon\data` or if that isn't set, `C:\Users\<user>\AppData\Local\pigeon\data` wgere <user> is your user.
 
 ## Data privacy and encryption
