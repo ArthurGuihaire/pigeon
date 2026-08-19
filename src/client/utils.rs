@@ -1,18 +1,16 @@
-use iroh::{Endpoint, PublicKey, SecretKey};
+use iroh::Endpoint;
 use arrayvec::{ArrayString, CapacityError};
 use iroh::endpoint::{Connection, ConnectionError};
 use iroh::endpoint_info::{EndpointData, EndpointInfo};
 use n0_error::{anyerr, Result};
 use n0_error::StdResultExt;
-use pigeon::{AuthRequest, ChangeNameRequest, GetKeyRequest, RegisterRequest};
-use pigeon::common::{ONLINE_USERNAME, SECRET_KEY, bind_endpoint};
-use pigeon::constants::{CHANGE_NAME_URL, DATA_DIR, GETKEY_URL, NAME_FILE, REGISTER_URL, START_AUTH_URL, USE_CUSTOM_HTTPS};
-use reqwest::{Certificate, Client, StatusCode};
+use pigeon::common::{SECRET_KEY, bind_endpoint};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, atomic};
 use std::time::Duration;
 use std::io::Write;
+use crate::api_wrapper::get_public_key;
 use crate::{USE_SERVER};
 use crate::mdns::get_endpoint_info_mdns;
 
@@ -45,7 +43,7 @@ pub fn flush_print_queue() {
     queue.clear();
 }
 
-// #[cfg(debug_assertions)]
+#[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! debug_print_above {
     ($($arg:tt)*) => {
@@ -53,11 +51,11 @@ macro_rules! debug_print_above {
     };
 }
 
-// #[cfg(not(debug_assertions))]
-// #[macro_export]
-// macro_rules! debug_print_above {
-//     ($($arg:tt)*) => {};
-// }
+#[cfg(not(debug_assertions))]
+#[macro_export]
+macro_rules! debug_print_above {
+    ($($arg:tt)*) => {};
+}
 
 pub enum DiscoveryType {
     MDNS,
@@ -139,164 +137,6 @@ pub async fn read_name() -> ArrayString<32> {
         }
         else {
             println!("Something's wrong with that name, its probably too long");
-        }
-    }
-}
-
-pub async fn create_name_and_register(path_prefix: &Path, publickey: &PublicKey, is_online: bool) -> Result<ArrayString<32>> {
-    let name_path = path_prefix.join(NAME_FILE);
-    let name_arraystring = loop {
-        let potential_name = read_name().await;
-        if is_online {
-            let result = register_http(&potential_name, publickey).await;
-            if result.is_ok() { break potential_name }
-            else { println!("That name is taken"); }
-        }
-        else { break potential_name }
-    };
-
-    if let Some(parent) = name_path.parent() && !parent.as_os_str().is_empty() {
-        std::fs::create_dir_all(parent).std_context("create config dir")?;
-    }
-    std::fs::write(name_path, name_arraystring.to_string()).std_context("write name file")?;
-    return Ok(name_arraystring);
-}
-
-fn build_client() -> Result<Client> {
-    if *USE_CUSTOM_HTTPS {
-        let cert_bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/rootCA.pem")).expect("custom https requested but cannot read certificate file rootCA.pem");
-        let ca_cert = Certificate::from_pem(&cert_bytes).anyerr()?;
-        reqwest::Client::builder().tls_certs_merge([ca_cert]).build().anyerr()
-    }
-    else {
-        Ok(reqwest::Client::new())
-    }
-}
-
-pub async fn change_name(new_name: &ArrayString<32>, secret_key: &SecretKey) -> Result<()> {
-    let old_name = ONLINE_USERNAME.get().expect("Cannot change online username unless you are connected to the internet").clone();
-    let auth_request = AuthRequest {
-        name: old_name,
-    };
-    let client = build_client()?;
-    let payload = postcard::to_allocvec(&auth_request).anyerr()?;
-    let response = client.post(&*START_AUTH_URL).body(payload).send().await.anyerr()?;
-    //for some reason getting .text moves the response??? so get status beforehand
-    let status = response.status();
-    let text = response.text().await.anyerr()?;
-    if status != StatusCode::OK {
-        eprintln!("Received error response: {}", text);
-        return Err("start_auth failed".into())
-    }
-
-    let challenge_bytes = hex::decode(&text).anyerr()?;
-    let signature = secret_key.sign(&challenge_bytes);
-    let change_name_request = ChangeNameRequest {
-        old_name,
-        new_name: *new_name,
-        hex_signature: hex::encode(&signature.to_bytes()),
-    };
-
-    let payload = postcard::to_allocvec(&change_name_request).anyerr()?;
-    let response = client.post(&*CHANGE_NAME_URL).body(payload).send().await.anyerr()?;
-    match response.status() {
-        StatusCode::UNAUTHORIZED => return Err("Error: Unauthorized. must start auth first".into()),
-        StatusCode::INTERNAL_SERVER_ERROR => return Err("Error: Internal server error".into()),
-        StatusCode::FORBIDDEN => return Err("Error: Authentication failed".into()),
-        StatusCode::EXPECTATION_FAILED => return Err("Error: Expectation failed".into()),
-        StatusCode::OK => {}, // do nothing, let the function keep running
-        status_code => return Err(format!("Error: unexpected status code {}, something went very wrong", status_code).into()),
-    }
-
-    std::fs::write(DATA_DIR.join(NAME_FILE), new_name.to_string())?;
-
-    safe_print(&format!("Successfully changed name to {}", new_name));
-
-    Ok(())
-}
-
-pub async fn change_name_interactive(secret_key: &SecretKey) -> Result<()> {
-    let new_name = loop {
-        let potential_name = read_name().await;
-        let result = get_public_key(&potential_name).await; // use get_public_key cause we actually know why it fails when it does
-        if let Err(err) = result && let Some(status) = err.status() && status == StatusCode::BAD_REQUEST {
-            break potential_name;
-        }
-        println!("That name is already taken, or a different error occured");
-    };
-
-    change_name(&new_name, secret_key).await
-}
-
-pub async fn get_public_key(
-    target: &ArrayString<32>,
-) -> Result<PublicKey, reqwest::Error> {
-    let client = build_client().expect("failed to create http client");
-
-    let request = GetKeyRequest { target: *target };
-    let payload = postcard::to_allocvec(&request).expect("failed to serialize request");
-
-    loop {
-        //send post
-        let response = client.get(&(*GETKEY_URL)).body(payload.clone()).send().await;
-
-        match response {
-            Ok(res) => {
-                let status = res.status();
-                if let Err(reqwest_err) = res.error_for_status_ref() {
-                    let error_text = res.text().await?;
-                    debug_print_above!("error response: {}: {}", status, error_text);
-
-                    return Err(reqwest_err);
-                }
-                if status.is_success() {
-                    let publickey: PublicKey = res.json().await.unwrap();
-                    return Ok(publickey)
-                }
-                // other responses are unexpected, something went wrong
-            }
-            Err(e) => {
-                // for network errors, wait a bit and try again
-                safe_print(&format!("network error: {}", e));
-                if let Some(source) = std::error::Error::source(&e) {
-                    debug_print_above!("Caused by: {:?}", source);
-                }
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        }
-    }
-}
-
-pub async fn register_http(name: &ArrayString<32>, publickey: &PublicKey) -> Result<(), reqwest::Error> {
-    let client = build_client().expect("failed to build http client");
-
-    let request = RegisterRequest {
-        name: *name,
-        publickey: *publickey,
-    };
-    let payload = postcard::to_allocvec(&request).expect("failed to serialize request");
-
-    loop {
-        let response = client.post(&(*REGISTER_URL)).body(payload.clone()).send().await;
-
-        match response {
-            Ok(res) => {
-                let status = res.status();
-                if let Err(reqwest_err) = res.error_for_status_ref() {
-                    let error_text = res.text().await?;
-                    debug_print_above!("error response: {}: {}", status, error_text);
-
-                    return Err(reqwest_err);
-                }
-                if status.is_success() {
-                    return Ok(())
-                }
-                // other responses are unexpected, something went wrong
-            }
-            Err(e) => {
-                // for network errors, try again
-                eprintln!("network error: {}", e);
-            }
         }
     }
 }

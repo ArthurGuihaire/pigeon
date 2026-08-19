@@ -1,8 +1,10 @@
 pub mod constants;
 pub mod common;
-use iroh::PublicKey;
+use std::collections::HashMap;
+use iroh::{PublicKey, Signature};
 use serde::{Serialize, Deserialize};
 use arrayvec::ArrayString;
+
 #[derive(Deserialize, Serialize)]
 pub struct RegisterRequest {
     pub name: ArrayString<32>,
@@ -37,7 +39,7 @@ pub enum DirectoryEntry {
 pub struct ChangeNameRequest {
     pub old_name: ArrayString<32>,
     pub new_name: ArrayString<32>,
-    pub hex_signature: String,
+    pub signature: Signature,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -46,6 +48,16 @@ pub struct AuthRequest {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SaveShutdownRequest {
-    pub hex_signature: String,
+pub struct DownloadDbRequest {
+    pub name: ArrayString<32>,
+    pub signature: Signature,
+}
+
+pub type ClientMap = HashMap<ArrayString<32>, (PublicKey, Option<[u8; 32]>)>;
+
+#[derive(Serialize, Deserialize)]
+pub struct InjectDbRequest {
+    pub name: ArrayString<32>,
+    pub signature: Signature,
+    pub db_bytes: Vec<u8>,
 }

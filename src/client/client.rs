@@ -7,15 +7,16 @@ mod connect;
 mod listen;
 mod mdns;
 mod utils;
+mod api_wrapper;
 
 use pigeon::common::{SECRET_KEY, MDNS_USERNAME, ONLINE_USERNAME, load_or_create_identity};
-use listen::listen;
 use pigeon::constants;
 
-use crate::utils::{change_name_interactive, create_endpoint, create_name_and_register, get_public_key, register_http, safe_print, try_load_name};
+use crate::api_wrapper::{change_name_interactive, create_name_and_register, download_db, get_public_key, inject_db, register_http};
+use crate::utils::{DiscoveryType, create_endpoint, get_endpoint_info_interactive, safe_print, try_load_name};
 use crate::mdns::exchange_info_mdns;
-use crate::utils::{DiscoveryType, get_endpoint_info_interactive};
 use crate::connect::connect_and_send;
+use listen::listen;
 
 pub static USE_SERVER: OnceLock<bool> = OnceLock::new();
 
@@ -25,6 +26,10 @@ struct Args {
     send_file: Option<PathBuf>,
     #[arg(short, long)]
     change_name: bool,
+    #[arg(short, long)]
+    download_db: bool,
+    #[arg(short, long)]
+    inject_db: bool,
 }
 
 async fn online_thread() -> Result<()> {
@@ -75,6 +80,22 @@ async fn main() -> Result<()> {
     if args.change_name {
         //could technically use "key" but SECRET_KEY should be the single source of truth
         return change_name_interactive(SECRET_KEY.get().unwrap()).await
+    }
+    else if args.download_db {
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            tokio::task::spawn_blocking(|| ONLINE_USERNAME.wait()),
+        )
+        .await.anyerr()?.anyerr()?;
+        return download_db(SECRET_KEY.get().unwrap()).await
+    }
+    else if args.inject_db {
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            tokio::task::spawn_blocking(|| ONLINE_USERNAME.wait()),
+        )
+        .await.anyerr()?.anyerr()?;
+        return inject_db(SECRET_KEY.get().unwrap()).await
     }
 
     let endpoint = create_endpoint().await?;
