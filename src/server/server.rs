@@ -1,25 +1,28 @@
 use arrayvec::ArrayString;
 use axum::Router;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::routing::post;
-use axum::response::IntoResponse;
 use axum_server::tls_rustls::RustlsConfig;
 use iroh::Signature;
+use n0_future::IterExt;
 use pigeon::AuthRequest;
 use pigeon::ChangeNameRequest;
+use pigeon::ClientMap;
 use pigeon::DownloadDbRequest;
 use pigeon::GetKeyRequest;
 use pigeon::InjectDbRequest;
-use pigeon::ClientMap;
+use pigeon::RegisterRequest;
 use pigeon::constants;
 use pigeon::constants::ADMIN_KEYS;
 use rand::Rng;
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::sync::Mutex;
-use pigeon::RegisterRequest;
+
+use crate::utils::ping_thread;
 
 mod utils;
 
@@ -44,7 +47,9 @@ async fn main() {
         .with_state(state);
 
     if *constants::USE_CUSTOM_HTTPS {
-        rustls::crypto::ring::default_provider().install_default().expect("failed to set default rustls crypto provider");
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("failed to set default rustls crypto provider");
         let config = RustlsConfig::from_pem_file("cert.pem", "key.pem")
             .await
             .expect("Failed to load cert.pem or key.pem");
@@ -52,26 +57,30 @@ async fn main() {
 
         axum_server::bind_rustls(addr, config)
             .serve(app.into_make_service())
-            .await.unwrap()
-    }
-    else {
+            .await
+            .unwrap()
+    } else {
+        let join_handle = tokio::spawn(ping_thread());
         let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
         axum::serve(listener, app).await.unwrap();
+        join_handle
+            .await
+            .inspect_err(|e| eprintln!("something went wrong: {e}"))
+            .unwrap();
     }
 }
 
 async fn handle_registration(
     axum::extract::State(state): axum::extract::State<SharedState>,
     body: axum::body::Bytes,
-) -> Result<StatusCode, (StatusCode, &'static str)>
-{
-    let payload: RegisterRequest = postcard::from_bytes(&body).map_err(|_| (StatusCode::BAD_REQUEST, "invalid postcard binary payload"))?;
+) -> Result<StatusCode, (StatusCode, &'static str)> {
+    let payload: RegisterRequest = postcard::from_bytes(&body)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid postcard binary payload"))?;
     let mut db = state.clients.lock().await;
     if db.contains_key(&payload.name) {
         debug_print!("Failed to create user: {}", payload.name);
         Err((StatusCode::BAD_REQUEST, "that name is already registered"))
-    }
-    else {
+    } else {
         db.insert(payload.name, (payload.publickey, None));
         debug_print!("Created new user: {}", payload.name);
         Ok(StatusCode::CREATED)
@@ -81,14 +90,26 @@ async fn handle_registration(
 async fn handle_key_request(
     axum::extract::State(state): axum::extract::State<SharedState>,
     body: axum::body::Bytes,
-) -> Result<impl IntoResponse, (StatusCode, String)>
-{
-    let payload: GetKeyRequest = postcard::from_bytes(&body).map_err(|_| (StatusCode::BAD_REQUEST, String::from("invalid postcard binary payload")))?;
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let payload: GetKeyRequest = postcard::from_bytes(&body).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            String::from("invalid postcard binary payload"),
+        )
+    })?;
     let db = state.clients.lock().await;
     match db.get(&payload.target) {
-        None => Err((StatusCode::BAD_REQUEST, format!("{} is not registered", &payload.target))),
+        None => Err((
+            StatusCode::BAD_REQUEST,
+            format!("{} is not registered", &payload.target),
+        )),
         Some(key) => {
-            let reply_payload = postcard::to_allocvec(&key.0).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::from("failed to serialize public key")))?;
+            let reply_payload = postcard::to_allocvec(&key.0).map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    String::from("failed to serialize public key"),
+                )
+            })?;
             debug_print!("Get key called for username {}", payload.target);
             Ok(reply_payload)
         }
@@ -97,15 +118,23 @@ async fn handle_key_request(
 
 async fn start_auth(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    body: axum::body::Bytes) -> (StatusCode, String)
-{
+    body: axum::body::Bytes,
+) -> (StatusCode, String) {
     let Ok(payload) = postcard::from_bytes::<AuthRequest>(&body) else {
-        return (StatusCode::BAD_REQUEST, String::from("invalid postcard binary payload"));
+        return (
+            StatusCode::BAD_REQUEST,
+            String::from("invalid postcard binary payload"),
+        );
     };
     let mut db = state.clients.lock().await;
     let result = db.get_mut(&payload.name);
     let entry = match result {
-        None => return (StatusCode::BAD_REQUEST, String::from("cannot change a name that is not registered")),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                String::from("cannot change a name that is not registered"),
+            );
+        }
         Some(val) => val,
     };
     let mut challenge_bytes = [0u8; 32];
@@ -118,12 +147,17 @@ async fn start_auth(
     (StatusCode::OK, challenge)
 }
 
-fn verify_auth(db: &mut ClientMap, name: &ArrayString<32>, signature: &Signature, check_admin: bool) -> bool {
+fn verify_auth(
+    db: &mut ClientMap,
+    name: &ArrayString<32>,
+    signature: &Signature,
+    check_admin: bool,
+) -> bool {
     let (key, challenge) = match db.get_mut(name) {
         None => return false,
         Some(pair) => match pair.1.take() {
             None => return false,
-            Some(challenge) => (&pair.0, challenge)
+            Some(challenge) => (&pair.0, challenge),
         },
     };
 
@@ -134,28 +168,30 @@ fn verify_auth(db: &mut ClientMap, name: &ArrayString<32>, signature: &Signature
     }
     if check_admin {
         ADMIN_KEYS.contains(key)
-    }
-    else {
+    } else {
         true
     }
 }
 
 async fn change_name(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    body: axum::body::Bytes) -> StatusCode
-{
+    body: axum::body::Bytes,
+) -> StatusCode {
     let Ok(payload) = postcard::from_bytes::<ChangeNameRequest>(&body) else {
         return StatusCode::BAD_REQUEST;
     };
     let mut db = state.clients.lock().await;
     if !verify_auth(&mut db, &payload.old_name, &payload.signature, false) {
-        debug_print!("Auth denied for user claiming to be {} trying to change name", payload.old_name);
+        debug_print!(
+            "Auth denied for user claiming to be {} trying to change name",
+            payload.old_name
+        );
         return StatusCode::FORBIDDEN;
     }
 
     let collision = db.contains_key(&payload.new_name);
     if collision {
-        return StatusCode::BAD_REQUEST
+        return StatusCode::BAD_REQUEST;
     }
     debug_print!("Changing name {} to {}", payload.old_name, payload.new_name);
     let old_entry = db.remove(&payload.old_name);
@@ -171,41 +207,52 @@ async fn change_name(
 
 async fn download_database(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    body: axum::body::Bytes) -> Result<impl IntoResponse, StatusCode>
-{
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, StatusCode> {
     let Ok(payload) = postcard::from_bytes::<DownloadDbRequest>(&body) else {
         return Err::<Vec<u8>, StatusCode>(StatusCode::INTERNAL_SERVER_ERROR);
     };
     let mut db = state.clients.lock().await;
     if !verify_auth(&mut db, &payload.name, &payload.signature, true) {
-        debug_print!("Auth denied for user {} trying to download database", payload.name);
+        debug_print!(
+            "Auth denied for user {} trying to download database",
+            payload.name
+        );
         return Err::<Vec<u8>, StatusCode>(StatusCode::FORBIDDEN);
     }
 
-    let response_bytes = postcard::to_allocvec(&*db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let response_bytes =
+        postcard::to_allocvec(&*db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     debug_print!("admin user {} downloaded db", payload.name);
     Ok(response_bytes)
 }
 
 async fn inject_database(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    body: axum::body::Bytes) -> StatusCode
-{
+    body: axum::body::Bytes,
+) -> StatusCode {
     let Ok(payload) = postcard::from_bytes::<InjectDbRequest>(&body) else {
-        return StatusCode::BAD_REQUEST
+        return StatusCode::BAD_REQUEST;
     };
     let mut db = state.clients.lock().await;
 
     if !verify_auth(&mut db, &payload.name, &payload.signature, true) {
-        debug_print!("Auth denied for user {} trying to inject database", payload.name);
-        return StatusCode::FORBIDDEN
+        debug_print!(
+            "Auth denied for user {} trying to inject database",
+            payload.name
+        );
+        return StatusCode::FORBIDDEN;
     }
 
     let Ok(inject_db) = postcard::from_bytes::<ClientMap>(&payload.db_bytes) else {
-        return StatusCode::BAD_REQUEST
+        return StatusCode::BAD_REQUEST;
     };
 
-    debug_print!("admin user {} injected db, {} entries added/replaced", payload.name, inject_db.len());
+    debug_print!(
+        "admin user {} injected db, {} entries added/replaced",
+        payload.name,
+        inject_db.len()
+    );
 
     db.extend(inject_db);
 
